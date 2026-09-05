@@ -162,6 +162,9 @@ struct std::hash<xresource::guid<T>>
 #include "details/xecs_event_mgr_inline.h"
 #include "details/xecs_prefab_inline.h"
 #include "details/xecs_serializer_inline.h"
+// xecs::persist::details - the encode/decode + reference-remap + prefab-instance-overlay helpers
+// both xecs_scene_inline.h and xecs_prefab_mgr_inline.h build on (see its own top-of-file comment).
+#include "details/xecs_reference_remap_inline.h"
 #include "details/xecs_scene_inline.h"
 #include "details/xecs_level_inline.h"
 // xecs_prefab_mgr_inline.h's new CreatePrefabFromEntity/Save/EnsureLoaded reuse the same

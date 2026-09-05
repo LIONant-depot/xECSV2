@@ -49,11 +49,25 @@ namespace xecs::editor
         // field isn't worth the risk of a new, untested var_type<> specialization. Converted to/from
         // xecs::component::type::guid at the two call sites that need it (E29's override bookkeeping).
         std::uint64_t                          m_ComponentTypeGuid;
+
+        // Which member of the group this override targets, as a child-index path walked from the
+        // entity that actually carries this prefab_instance component: empty means "the
+        // prefab_instance-carrying entity itself" (the only case that existed before multi-entity
+        // groups), {i} means "my children.m_List[i]", {i,j} means that child's own children.m_List[j],
+        // etc. A path, not a stored id, because a placed instance's non-root members have no id of
+        // their own at all - the instance is a structural clone of the prefab's own root/children tree
+        // (see [[xecs_multientity_prefab_architecture]]), so the SAME index path found by walking down
+        // from the instance root also finds the corresponding member walking down from the PREFAB's own
+        // root, with no extra bookkeeping needed on either side. Stops at the nearest containing
+        // instance (does not cross into a nested instance's own subtree) - matches this session's
+        // existing scope narrowing for nested-instance diffs.
+        std::vector<std::uint32_t>             m_MemberPath;
         std::vector<prefab_property_override>  m_PropertyOverrides;
 
         XPROPERTY_DEF
         ( "PrefabComponentOverride", prefab_component_override
         , obj_member<"ComponentTypeGuid", &prefab_component_override::m_ComponentTypeGuid>
+        , obj_member<"MemberPath",         &prefab_component_override::m_MemberPath>
         , obj_member<"PropertyOverrides",  &prefab_component_override::m_PropertyOverrides>
         )
     };

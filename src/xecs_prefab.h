@@ -29,9 +29,26 @@ namespace xecs::prefab
 
         inline xerr Serialize(xecs::serializer::stream&, bool) noexcept;
 
-        guid                                                        m_ParentPrefabGuid; // GUID of the parent prefab is this is null the is a regular prefab other wise is a variant 
+        guid                                                        m_ParentPrefabGuid; // GUID of the parent prefab is this is null the is a regular prefab other wise is a variant
         guid                                                        m_Guid;             // GUID of the prefab
-        std::unordered_map<std::uint64_t, xecs::component::entity>  m_Remap{};          // Hash map used to remap the references
+    };
+
+    // A multi-entity ("Scene-Prefab") group's own local-id scheme, scoped to just one prefab's
+    // member set - the direct analog of xecs::scene::permanent_id, just not shared with Scene's
+    // own id space (a prefab has no folders/dependencies/residency, so it doesn't need any of
+    // Scene's other bookkeeping, only the id<->live-entity mapping). GUID-like minting
+    // (mgr::details::NextFreeLocalId), not sequential - same merge-collision reasoning already
+    // applied to E29's own NextFreeEntityId.
+    using local_id = std::uint32_t;
+    constexpr local_id invalid_local_id_v = 0;
+
+    // Save/EnsureLoaded's own bookkeeping for one prefab group's members - kept OUTSIDE mgr::m_PrefabList
+    // (which still only ever stores the root entity, unchanged, so every existing reader keeps
+    // compiling) in a separate, purely-additive map (mgr::m_PrefabGroups) keyed the same way.
+    struct group_bookkeeping
+    {
+        std::unordered_map<local_id, xecs::component::entity>   m_LocalToRuntime;
+        std::unordered_map<std::uint64_t, local_id>              m_RuntimeToLocal;  // keyed by entity.m_Value
     };
 
     //-------------------------------------------------------------------------------

@@ -39,7 +39,13 @@ namespace xecs::component
         {
             auto& Children = reinterpret_cast<children*>(pData)[Index];
 
-            int nChildren = isRead ? static_cast<int>(Children.m_List.size()) : 0;
+            // Was hardcoded to 0 on the write path (isRead==false), regardless of the list's actual
+            // size - meaning nTotalChildren below always summed to 0 during a save, so the "AllChildren"
+            // record (further down, gated on nTotalChildren!=0) never even ran: children were never
+            // actually written to disk for ANY entity, a pre-existing bug that simply had nothing to
+            // expose it until this session's multi-entity prefab work became the first real writer of a
+            // non-empty xecs::component::children list.
+            int nChildren = static_cast<int>(Children.m_List.size());
             if( Err = TextFile.Field("nChildren", nChildren); Err ) return;
             if(isRead) Children.m_List.resize(nChildren);
 
@@ -67,6 +73,9 @@ namespace xecs::component
             }
 
             Err = TextFile.Field("Entity", pChildren->m_List[iChild] );
+            iChild++;   // was never advanced - every row kept re-reading/re-writing index 0, so any
+                        // entity with 2+ children round-tripped its FIRST child's value duplicated
+                        // across every slot instead of each child's own real value.
 
         }))) return Error;
 
