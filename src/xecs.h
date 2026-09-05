@@ -12,6 +12,16 @@
 #define NOMINMAX
 #include "Windows.h"
 
+// Windows.h (via wingdi.h) #defines ERROR as a plain numeric macro - harmless on its own, but fatal
+// to anything that later declares an identifier literally named ERROR (e.g.
+// xresource_pipeline::msg_type::ERROR, in xresource_pipeline_v2/source/xresource_pipeline.h - an
+// enumerator, not a macro use, so the preprocessor still substitutes it and corrupts the enum's
+// syntax). Undefining it here means any consumer that includes xecs.h before such a header no
+// longer has to care about include order to avoid this collision.
+#ifdef ERROR
+    #undef ERROR
+#endif
+
 #include <iostream>
 #include <vector>
 #include <array>
@@ -27,6 +37,21 @@
 #include "dependencies/xtextfile/source/xtextfile.h"
 #include "dependencies/xproperty/source/xcore/my_properties.h"
 #include "dependencies/xproperty/source/sprop/property_sprop.h"
+
+// Scene/Level are full resources (real full_guid identity, real descriptor::base/factory_base
+// reflected descriptors) even though xECS itself never compiles them to a binary form - see
+// xecs_scene_descriptor.h/xecs_level_descriptor.h. These are the narrow set of xresource_pipeline_v2
+// headers that actually need (descriptor_base/factory/version), included directly rather than via
+// that library's own xresource_pipeline.h umbrella (which also drags in the compiler-side/
+// null-UI-property machinery xECS has no use for). None of these three headers have their own
+// include guards (same "included exactly once via an umbrella" convention xECS's own files use), so
+// they must not be included again from xecs_scene_descriptor.h/xecs_level_descriptor.h.
+#include "dependencies/xproperty/source/sprop/property_sprop_xtextfile_serializer.h"
+#include "dependencies/xresource_guid/source/bridges/xresource_xproperty_bridge.h"
+#include "dependencies/xresource_pipeline_v2/source/xresource_pipeline_version.h"
+#include "dependencies/xresource_pipeline_v2/source/xresource_pipeline_descriptor_base.h"
+#include "dependencies/xresource_pipeline_v2/source/xresource_pipeline_info.h"
+#include "dependencies/xresource_pipeline_v2/source/xresource_pipeline_factory.h"
 
 // xresource_guid.h only specializes std::hash for its own named aliases (instance_guid, type_guid,
 // full_guid, def_guid<...>, ...) - xECS mints its own custom-tagged xresource::guid<T> aliases
@@ -98,6 +123,9 @@ struct std::hash<xresource::guid<T>>
 #include "xecs_tools.h"
 #include "xecs_tools_bits.h"
 #include "xecs_scene.h"
+#include "xecs_scene_descriptor.h"
+#include "xecs_level.h"
+#include "xecs_level_descriptor.h"
 #include "xecs_component_mgr.h"
 #include "xecs_pool.h"
 #include "xecs_archetype.h"
@@ -106,6 +134,7 @@ struct std::hash<xresource::guid<T>>
 #include "xecs_query_iterator.h"
 #include "xecs_prefab.h"
 #include "xecs_prefab_mgr.h"
+#include "xecs_prefab_descriptor.h"
 #include "xecs_system.h"
 #include "xecs_system_mgr.h"
 #include "xecs_game_mgr.h"
@@ -132,8 +161,12 @@ struct std::hash<xresource::guid<T>>
 #include "details/xecs_event_inline.h"
 #include "details/xecs_event_mgr_inline.h"
 #include "details/xecs_prefab_inline.h"
-#include "details/xecs_prefab_mgr_inline.h"
 #include "details/xecs_serializer_inline.h"
 #include "details/xecs_scene_inline.h"
+#include "details/xecs_level_inline.h"
+// xecs_prefab_mgr_inline.h's new CreatePrefabFromEntity/Save/EnsureLoaded reuse the same
+// xecs::serializer::stream::Field template and on-disk component-serialization approach
+// xecs_scene_inline.h's SaveEntity/LoadEntity already use, so this must come after both.
+#include "details/xecs_prefab_mgr_inline.h"
 
 #endif

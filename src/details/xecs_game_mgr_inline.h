@@ -487,7 +487,7 @@ namespace xecs::game_mgr
         xecs::tools::bits SubBits;
 
         for( auto& e : Add ) AddBits.setBit(e->m_BitID);
-        for (auto& e : Sub ) AddBits.setBit(e->m_BitID);
+        for (auto& e : Sub ) SubBits.setBit(e->m_BitID);
 
         return m_ArchetypeMgr.AddOrRemoveComponents
         ( Entity

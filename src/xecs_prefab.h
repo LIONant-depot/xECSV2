@@ -6,6 +6,11 @@ namespace xecs::prefab
 {
     using                   guid            = xresource::full_guid;
 
+    // Prefab is a full resource, same treatment as Scene/Level: a real minted type guid, used both
+    // in the plugin's Plugin.config (Prefab is registered/listed/asset-browsable, with no compiler)
+    // and as new prefabs' full_guid.m_Type at creation time (see mgr::CreatePrefabFromEntity).
+    inline constexpr auto type_guid_v = xresource::type_guid(xresource::guid_generator::Instance64FromString("Prefab"));
+
     struct tag
     {
         constexpr static auto typedef_v = xecs::component::type::exclusive_tag

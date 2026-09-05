@@ -215,6 +215,7 @@ namespace xecs::game_mgr
         xecs::archetype::mgr                                m_ArchetypeMgr      {*this};
         xecs::prefab::mgr                                   m_PrefabMgr         {*this};
         xecs::scene::mgr                                    m_SceneMgr          {*this};
+        xecs::level::mgr                                    m_LevelMgr          {*this};
         bool                                                m_isRunning         = false;
         xecs::log::channel                                  m_LogChannel        { "xecs" };
     };

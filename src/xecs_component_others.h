@@ -91,8 +91,37 @@ namespace xecs::component
         , obj_member<"Children", &children::m_List>
         )
     };
+
+    //
+    // General-purpose "points at another entity" component - unlike parent/children (which encode a
+    // specific hierarchy relationship and use ReportReferences/BY_FUNCTION), this is a plain reflected
+    // field with no hand-written Serialize/ReportReferences at all: m_ReferenceMode stays AUTO, which
+    // self-detects BY_PROPERTIES since m_Target is xproperty-reflected (see
+    // xecs_entity_xproperty_bridge.h's var_type<entity> specialization, and
+    // xecs_component_type_inline.h's references_mode_v/ScopeHasEntityReferenceProperty) - so save/load
+    // reference remapping (xecs_scene_inline.h's ResolveReferenceForSave/RemapLoadedEntityReferences)
+    // already works for this with zero new code there, same-scene or a declared parent-scene target
+    // alike. The user-facing point of this component: it's the first (and, for now, only) way to
+    // create a genuine cross-scene entity reference in the editor, which is what actually exercises a
+    // scene's "Dependencies" (m_ParentScenes/m_ExternalRefTable) - without some component like this,
+    // that machinery is fully built but never actually driven by anything a user can create.
+    struct entity_reference
+    {
+        constexpr static auto typedef_v = xecs::component::type::data
+        {
+            .m_pName                = "EntityReference"
+        };
+
+        xecs::component::entity m_Target;
+
+        XPROPERTY_DEF
+        ( "EntityReference", entity_reference
+        , obj_member<"Target", &entity_reference::m_Target>
+        )
+    };
 }
 XPROPERTY_REG(xecs::component::parent)
 XPROPERTY_REG(xecs::component::children)
+XPROPERTY_REG(xecs::component::entity_reference)
 
 #endif

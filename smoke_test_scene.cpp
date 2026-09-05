@@ -75,7 +75,7 @@ int main()
         GameMgr.RegisterComponents<position, link>();
         GameMgr.RegisterSystems<>(); // locks component bit IDs - required before any archetype/entity creation
 
-        GameMgr.m_SceneMgr.m_RootPath = RootPath;
+        GameMgr.m_SceneMgr.m_ProjectPath = RootPath;
 
         STEP("create parent entity");
         auto& PositionArchetype = GameMgr.getOrCreateArchetype<position>();
@@ -149,7 +149,7 @@ int main()
         GameMgr.RegisterComponents<position, link>();
         GameMgr.RegisterSystems<>(); // locks component bit IDs - required before any archetype/entity creation
 
-        GameMgr.m_SceneMgr.m_RootPath = RootPath;
+        GameMgr.m_SceneMgr.m_ProjectPath = RootPath;
 
         STEP("RequestLoad(child)");
         auto Error = GameMgr.m_SceneMgr.RequestLoad(ChildGuid);

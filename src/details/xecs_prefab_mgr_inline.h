@@ -1,3 +1,6 @@
+#include <filesystem>
+#include <format>
+
 namespace xecs::prefab
 {
     //--------------------------------------------------------------------------------------------------------------
@@ -202,7 +205,7 @@ namespace xecs::prefab
             else
             {
                 assert( std::tuple_size_v<xecs::component::type::details::share_only_tuple_t<typename fn_traits::args_tuple>> == 0 );
-                if constexpr (std::is_same_v< T_CALLBACK, xecs::tools::empty_lambda > || std::tuple_size_v<xecs::component::type::details::share_only_tuple_t<typename fn_traits::args_tuple>> == 0) InstanceArchetype.CreateEntities( Count, Entity, std::forward<T_CALLBACK&&>(Callback) );
+                if constexpr (std::is_same_v< T_CALLBACK, xecs::tools::empty_lambda > || std::tuple_size_v<xecs::component::type::details::share_only_tuple_t<typename fn_traits::args_tuple>> == 0) InstanceEntity = InstanceArchetype.CreateEntities( Count, Entity, std::forward<T_CALLBACK&&>(Callback) );
                 else 
                 {
                     xassert( false && "You are trying to chage a share component using a function but the entity has not share components" );
@@ -505,4 +508,235 @@ AddOrRemoveComponents
         );
     }
     */
+
+    namespace details
+    {
+        //-----------------------------------------------------------------------------------------
+        // On-disk path - the same real GUID-sharded Descriptors/Prefab/<b0>/<b1>/<guid>.desc/
+        // convention xecs::scene::mgr/xecs::level::mgr use (see xecs_scene_inline.h's identical
+        // helper for the full rationale). A prefab is just one entity, so unlike Scene's entity_db
+        // there's no sharded sub-folder needed - the entity's data lives directly in this folder.
+        //-----------------------------------------------------------------------------------------
+        inline std::wstring PrefabFolder( mgr& Mgr, guid PrefabGuid ) noexcept
+        {
+            const auto Value = PrefabGuid.m_Instance.m_Value;
+            const auto Byte0 = std::format( L"{:02X}", static_cast<std::uint8_t>( Value       & 0xFF) );
+            const auto Byte1 = std::format( L"{:02X}", static_cast<std::uint8_t>((Value >> 8) & 0xFF) );
+            return Mgr.m_ProjectPath + L"/Descriptors/Prefab/" + Byte0 + L"/" + Byte1 + L"/" + std::format(L"{:X}", Value) + L".desc";
+        }
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    guid mgr::CreatePrefabFromEntity( xecs::component::entity Source, guid PrefabGuid ) noexcept
+    {
+        auto& SourceDetails   = m_GameMgr.m_ComponentMgr.getEntityDetails(Source);
+        auto& SourceArchetype = *SourceDetails.m_pPool->m_pArchetype;
+        auto  DataSpan        = SourceArchetype.getDataComponentInfos();
+
+        // New archetype = Source's current data components (excluding "entity", added automatically
+        // by CreateEntity below) + prefab::tag + prefab::root - the exact same bit setup
+        // CreatePrefab<T...>() forces onto every compile-time-authored prefab.
+        std::vector<const xecs::component::type::info*> Infos;
+        Infos.reserve(DataSpan.size() + 3);
+        Infos.push_back( &xecs::component::type::info_v<xecs::component::entity> );
+        Infos.push_back( &xecs::component::type::info_v<xecs::prefab::tag> );
+        Infos.push_back( &xecs::component::type::info_v<xecs::prefab::root> );
+        for( auto pInfo : DataSpan )
+            if( pInfo != &xecs::component::type::info_v<xecs::component::entity> )
+                Infos.push_back(pInfo);
+
+        auto& NewArchetype = m_GameMgr.getOrCreateArchetype( { Infos.data(), Infos.size() } );
+
+        // CreateEntity's Infos/MoveData span only walks a pool's per-entity DATA storage - tag
+        // components (xecs::prefab::tag included) carry no data and are never part of a pool's
+        // per-component array, so instance::CreateEntity's internal
+        // Pool.findIndexComponentFromInfo(Info)>=0 assert fires if a tag sneaks into this list. They
+        // still belong in Infos above (the archetype's bit identity needs them) - just not here.
+        std::vector<const xecs::component::type::info*> DataInfos;
+        DataInfos.reserve(Infos.size());
+        for( auto pInfo : Infos )
+            if( pInfo->m_TypeID != xecs::component::type::id::TAG )
+                DataInfos.push_back(pInfo);
+
+        std::vector<std::byte*> MoveData( DataInfos.size(), nullptr );
+        auto NewEntity = NewArchetype.CreateEntity( { DataInfos.data(), DataInfos.size() }, { MoveData.data(), MoveData.size() } );
+
+        auto& NewDetails = m_GameMgr.m_ComponentMgr.getEntityDetails(NewEntity);
+        auto& NewPool    = *NewDetails.m_pPool;
+
+        // Copy each of Source's live component values across (entity/tag carry no data of their own;
+        // root's identity is set explicitly below).
+        for( auto pInfo : DataSpan )
+        {
+            if( pInfo == &xecs::component::type::info_v<xecs::component::entity> ) continue;
+
+            const auto iSrcType = SourceDetails.m_pPool->findIndexComponentFromInfo(*pInfo);
+            const auto iDstType = NewPool.findIndexComponentFromInfo(*pInfo);
+            assert(iSrcType >= 0 && iDstType >= 0);
+
+            auto pSrc = &SourceDetails.m_pPool->m_pComponent[iSrcType][ SourceDetails.m_PoolIndex.m_Value * pInfo->m_Size ];
+            auto pDst = &NewPool.m_pComponent[iDstType][ NewDetails.m_PoolIndex.m_Value * pInfo->m_Size ];
+
+            if( pInfo->m_pCopyFn ) pInfo->m_pCopyFn(pDst, pSrc);
+            else                   std::memcpy(pDst, pSrc, pInfo->m_Size);
+        }
+
+        NewPool.getComponent<xecs::prefab::root>(NewDetails.m_PoolIndex).m_Guid = PrefabGuid;
+
+        m_PrefabList.insert({ PrefabGuid.m_Instance.m_Value, NewEntity });
+        return PrefabGuid;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    xerr mgr::Save( guid PrefabGuid ) noexcept
+    {
+        auto It = m_PrefabList.find(PrefabGuid.m_Instance.m_Value);
+        if( It == m_PrefabList.end() )
+            return xerr::create<xecs::game_mgr::state::FAILURE, "prefab::mgr::Save: prefab is not resident - call EnsureLoaded/CreatePrefabFromEntity first">();
+
+        auto  RootEntity = It->second;
+        auto& Details    = m_GameMgr.m_ComponentMgr.getEntityDetails(RootEntity);
+        auto& Archetype  = *Details.m_pPool->m_pArchetype;
+        auto  DataSpan   = Archetype.getDataComponentInfos();
+
+        std::vector<const xecs::component::type::info*> Infos;
+        Infos.reserve(DataSpan.size());
+        for( auto pInfo : DataSpan )
+        {
+            if( pInfo == &xecs::component::type::info_v<xecs::component::entity> ) continue;
+            if( pInfo == &xecs::component::type::info_v<xecs::prefab::tag> )       continue;
+            if( pInfo == &xecs::component::type::info_v<xecs::prefab::root> )      continue;
+            Infos.push_back(pInfo);
+        }
+
+        const auto Folder = details::PrefabFolder(*this, PrefabGuid);
+        std::error_code Ec;
+        std::filesystem::create_directories( std::filesystem::path(Folder), Ec );
+
+        // The real, reflected descriptor - just a read-only diagnostic listing of component types.
+        descriptor Descriptor;
+        for( auto pInfo : Infos ) Descriptor.m_ComponentTypeGuids.push_back(pInfo->m_Guid.m_Value);
+
+        xproperty::settings::context Context;
+        if( auto Err = Descriptor.Serialize( false, Folder + L"/Descriptor.txt", Context ); Err )
+            return Err;
+
+        // The entity's actual component data - same per-component-guid-list + SerializeOneComponent
+        // format xecs::scene::mgr::SaveEntity already uses for scene entity files.
+        xecs::serializer::stream TextFile;
+        if( auto Err = TextFile.Open( false, Folder + L"/Entity.txt", xtextfile::file_type::TEXT, xtextfile::flags{ .m_isWriteFloats = true } ); Err )
+            return Err;
+
+        int nComponents = static_cast<int>(Infos.size());
+        if( auto Err = TextFile.Record( "EntityInfo", [&]( xerr& Error ) noexcept
+            {
+                Error = TextFile.Field("nComponents", nComponents);
+            }
+        ); Err ) return Err;
+
+        if( false == Infos.empty() )
+        {
+            if( auto Err = TextFile.Record( "ComponentTypes"
+            ,   [&]( std::size_t& C, xerr& ) noexcept { C = Infos.size(); }
+            ,   [&]( std::size_t i, xerr& Error ) noexcept
+                {
+                    std::uint64_t V = Infos[i]->m_Guid.m_Value;
+                    Error = TextFile.Field("Guid", V);
+                }
+            ); Err ) return Err;
+        }
+
+        for( auto pInfo : Infos )
+        {
+            const auto iType = Details.m_pPool->findIndexComponentFromInfo(*pInfo);
+            assert(iType >= 0);
+            auto pData = &Details.m_pPool->m_pComponent[iType][ Details.m_PoolIndex.m_Value * pInfo->m_Size ];
+            if( auto Err = xecs::scene::details::SerializeOneComponent(TextFile, false, *pInfo, pData); Err )
+                return Err;
+        }
+
+        return {};
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    xerr mgr::EnsureLoaded( guid PrefabGuid ) noexcept
+    {
+        if( m_PrefabList.find(PrefabGuid.m_Instance.m_Value) != m_PrefabList.end() )
+            return {};
+
+        const auto Folder = details::PrefabFolder(*this, PrefabGuid);
+
+        xecs::serializer::stream TextFile;
+        if( auto Err = TextFile.Open( true, Folder + L"/Entity.txt", xtextfile::file_type::TEXT, xtextfile::flags{} ); Err )
+            return Err;
+
+        int nComponents = 0;
+        if( auto Err = TextFile.Record( "EntityInfo", [&]( xerr& Error ) noexcept
+            {
+                Error = TextFile.Field("nComponents", nComponents);
+            }
+        ); Err ) return Err;
+
+        std::vector<const xecs::component::type::info*> Infos( static_cast<std::size_t>(nComponents), nullptr );
+        if( nComponents > 0 )
+        {
+            if( auto Err = TextFile.Record( "ComponentTypes"
+            ,   [&]( std::size_t& C, xerr& ) noexcept { C = static_cast<std::size_t>(nComponents); }
+            ,   [&]( std::size_t i, xerr& Error ) noexcept
+                {
+                    std::uint64_t GuidValue = 0;
+                    if( (Error = TextFile.Field("Guid", GuidValue)) ) return;
+                    Infos[i] = xecs::component::mgr::findComponentTypeInfo( xecs::component::type::guid{GuidValue} );
+                }
+            ); Err ) return Err;
+        }
+
+        for( auto pInfo : Infos )
+            if( pInfo == nullptr )
+                return xerr::create<xecs::game_mgr::state::FAILURE, "Prefab file references a component type that is no longer registered">();
+
+        std::vector<const xecs::component::type::info*> ArchetypeInfos;
+        ArchetypeInfos.reserve(Infos.size() + 3);
+        ArchetypeInfos.push_back( &xecs::component::type::info_v<xecs::component::entity> );
+        ArchetypeInfos.push_back( &xecs::component::type::info_v<xecs::prefab::tag> );
+        ArchetypeInfos.push_back( &xecs::component::type::info_v<xecs::prefab::root> );
+        for( auto pInfo : Infos ) ArchetypeInfos.push_back(pInfo);
+
+        auto& Archetype = m_GameMgr.getOrCreateArchetype( { ArchetypeInfos.data(), ArchetypeInfos.size() } );
+
+        // Same tag-exclusion as CreatePrefabFromEntity above - CreateEntity's Infos/MoveData span
+        // must only list per-entity DATA storage, never tag components.
+        std::vector<const xecs::component::type::info*> DataInfos;
+        DataInfos.reserve(ArchetypeInfos.size());
+        for( auto pInfo : ArchetypeInfos )
+            if( pInfo->m_TypeID != xecs::component::type::id::TAG )
+                DataInfos.push_back(pInfo);
+
+        std::vector<std::byte*> MoveData( DataInfos.size(), nullptr );
+        auto NewEntity = Archetype.CreateEntity( { DataInfos.data(), DataInfos.size() }, { MoveData.data(), MoveData.size() } );
+
+        auto& NewDetails = m_GameMgr.m_ComponentMgr.getEntityDetails(NewEntity);
+        auto& Pool       = *NewDetails.m_pPool;
+
+        for( auto pInfo : Infos )
+        {
+            const auto iType = Pool.findIndexComponentFromInfo(*pInfo);
+            assert(iType >= 0);
+            auto pData = &Pool.m_pComponent[iType][ NewDetails.m_PoolIndex.m_Value * pInfo->m_Size ];
+            if( auto Err = xecs::scene::details::SerializeOneComponent(TextFile, true, *pInfo, pData); Err )
+            {
+                auto E = NewEntity;
+                m_GameMgr.DeleteEntity(E);
+                return Err;
+            }
+        }
+
+        Pool.getComponent<xecs::prefab::root>(NewDetails.m_PoolIndex).m_Guid = PrefabGuid;
+
+        m_PrefabList.insert({ PrefabGuid.m_Instance.m_Value, NewEntity });
+        return {};
+    }
 }
