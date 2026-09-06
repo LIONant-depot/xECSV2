@@ -64,6 +64,8 @@ namespace xecs::component
             using bits_to_info_array = std::array<const xecs::component::type::info*, xecs::settings::max_component_types_v>;
             using component_info_map = std::unordered_map<xecs::component::type::guid, const xecs::component::type::info*>;
 
+            using bits_to_owner_array = std::array<xecs::plugin::token, xecs::settings::max_component_types_v>;
+
             component_info_map    m_ComponentInfoMap  {};
             xecs::tools::bits     m_ShareBits         {};
             xecs::tools::bits     m_DataBits          {};
@@ -71,6 +73,11 @@ namespace xecs::component
             xecs::tools::bits     m_ExclusiveTagsBits {};
             int                   m_UniqueID          = 0;
             bits_to_info_array    m_BitsToInfo        {};
+            // Which plugin_token registered the type at m_BitsToInfo[i] - index-aligned with
+            // m_BitsToInfo (LockComponentTypes' sort keeps the two in sync; see its own comment).
+            // Defaults to plugin::host_v, so every built-in/host-registered type is implicitly
+            // host-owned without any call site needing to say so explicitly.
+            bits_to_owner_array   m_Owner             {};
             int                   m_nTypes            = 0;
             bool                  m_isLocked          = false;
         };
@@ -89,7 +96,7 @@ namespace xecs::component
         > requires
         ( xecs::component::type::is_valid_v<T_COMPONENT>
         )
-        void                                RegisterComponent       ( void
+        void                                RegisterComponent       ( xecs::plugin::token Owner = xecs::plugin::host_v
                                                                     ) noexcept;
         inline
         const entity::global_info&          getEntityDetails        ( xecs::component::entity Entity 
@@ -117,7 +124,20 @@ namespace xecs::component
         const xecs::component::type::info*  findComponentTypeInfo   ( xecs::component::type::guid Guid
                                                                     ) noexcept;
         inline static
-        void                                resetRegistrations      ( void 
+        void                                resetRegistrations      ( void
+                                                                    ) noexcept;
+        // The detach/quiesce primitive a plugin-DLL reload sequence calls before FreeLibrary-ing
+        // the plugin. Phase 6 scope, deliberately narrow: exactly one plugin generation is ever
+        // live at a time, and by the time this is called the entire runtime world - every
+        // archetype/entity that could depend on a current BitID assignment - has already been torn
+        // down (see the xECSV2 type-registration architecture plan's Phase 8A sequence), so a full
+        // registry reset is the correct, sufficient operation - not a partial, in-place erase that
+        // would have to renumber every OTHER still-registered type's BitID while something might
+        // still reference the old one. The assert below enforces that scoping honestly: it fails
+        // loudly if a second, independent plugin is ever registered at once, since supporting that
+        // safely (without invalidating everyone else's BitIDs) is Phase 8B's job, not this one.
+        inline static
+        void                                UnregisterPlugin        ( xecs::plugin::token Token
                                                                     ) noexcept;
         details::global_info_mgr                            m_GlobalEntityInfos {};
 

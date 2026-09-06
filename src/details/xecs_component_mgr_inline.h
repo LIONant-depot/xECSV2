@@ -163,7 +163,7 @@ namespace xecs::component
 
     template< typename T_COMPONENT >
     requires (xecs::component::type::is_valid_v<T_COMPONENT>)
-    void mgr::RegisterComponent(void) noexcept
+    void mgr::RegisterComponent(xecs::plugin::token Owner) noexcept
     {
         assert( s_Registry.m_isLocked == false );
         if (component::type::info_v<T_COMPONENT>.m_BitID == type::info::invalid_bit_id_v)
@@ -177,6 +177,7 @@ namespace xecs::component
             // Put there an invalid bitUD that indicates that we are waiting to be assign the right ID
             component::type::info_v<T_COMPONENT>.m_BitID = type::info::invalid_bit_id_v-1;
 
+            s_Registry.m_Owner[s_Registry.m_nTypes]      = Owner;
             s_Registry.m_BitsToInfo[s_Registry.m_nTypes++] = &component::type::info_v<T_COMPONENT>;
         }
     }
@@ -225,13 +226,28 @@ namespace xecs::component
         s_Registry.m_isLocked = true;
 
         //
-        // Short the final list of component types infos
+        // Short the final list of component types infos - m_Owner must move in lockstep with
+        // m_BitsToInfo (RegisterComponent recorded both at the same pre-sort index), so this sorts
+        // a temporary array of paired {info*, owner} entries rather than m_BitsToInfo alone, which
+        // would otherwise silently desync ownership from the type it actually belongs to.
         //
+        struct sort_entry { const xecs::component::type::info* m_pInfo; xecs::plugin::token m_Owner; };
+        std::array<sort_entry, xecs::settings::max_component_types_v> SortArray;
+        for( int i = 0; i < s_Registry.m_nTypes; ++i )
+            SortArray[i] = { s_Registry.m_BitsToInfo[i], s_Registry.m_Owner[i] };
+
         std::sort
-        ( s_Registry.m_BitsToInfo.begin()
-        , s_Registry.m_BitsToInfo.begin() + s_Registry.m_nTypes
-        , xecs::component::type::details::CompareTypeInfos
+        ( SortArray.begin()
+        , SortArray.begin() + s_Registry.m_nTypes
+        , []( const sort_entry& A, const sort_entry& B ) noexcept
+          { return xecs::component::type::details::CompareTypeInfos(A.m_pInfo, B.m_pInfo); }
         );
+
+        for( int i = 0; i < s_Registry.m_nTypes; ++i )
+        {
+            s_Registry.m_BitsToInfo[i] = SortArray[i].m_pInfo;
+            s_Registry.m_Owner[i]      = SortArray[i].m_Owner;
+        }
 
         //
         // Officially register each of the components
@@ -289,7 +305,28 @@ namespace xecs::component
 
         s_Registry.m_UniqueID          = 0;
         s_Registry.m_BitsToInfo        = type::registry::bits_to_info_array{};
+        s_Registry.m_Owner             = type::registry::bits_to_owner_array{};
         s_Registry.m_nTypes            = 0;
         s_Registry.m_isLocked          = false;
+    }
+
+    //---------------------------------------------------------------------------
+
+    void mgr::UnregisterPlugin( xecs::plugin::token Token ) noexcept
+    {
+        // The host itself is never "unregistered" as a plugin - it's the one owner that survives
+        // every reload.
+        xassert( !(Token == xecs::plugin::host_v) );
+
+        // See this method's own declaration comment (xecs_component_mgr.h) for why a full reset is
+        // the correct operation here, and why this assert is the honest stand-in for the narrower
+        // "only detach what this token owns, leave everyone else's BitIDs untouched" behavior a
+        // future multi-plugin scenario (Phase 8B) would need instead.
+        for( int i = 0; i < s_Registry.m_nTypes; ++i )
+        {
+            xassert( s_Registry.m_Owner[i] == Token || s_Registry.m_Owner[i] == xecs::plugin::host_v );
+        }
+
+        resetRegistrations();
     }
 }

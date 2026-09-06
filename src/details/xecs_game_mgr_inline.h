@@ -21,9 +21,16 @@ namespace xecs::game_mgr
     //---------------------------------------------------------------------------
 
     template< typename...T_COMPONENTS >
-    void instance::RegisterComponents(void) noexcept
+    void instance::RegisterComponents(xecs::plugin::token Owner) noexcept
     {
-        ((m_ComponentMgr.RegisterComponent<T_COMPONENTS>()), ...);
+        ((m_ComponentMgr.RegisterComponent<T_COMPONENTS>(Owner)), ...);
+    }
+
+    //---------------------------------------------------------------------------
+
+    void instance::UnregisterPlugin(xecs::plugin::token Token) noexcept
+    {
+        xecs::component::mgr::UnregisterPlugin(Token);
     }
 
     //---------------------------------------------------------------------------

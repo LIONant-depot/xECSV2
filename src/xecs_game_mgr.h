@@ -15,6 +15,12 @@ namespace xecs::game_mgr
                                                                     ) = delete;
         inline                              instance                ( void
                                                                     ) noexcept;
+        // No plugin_token parameter here, unlike RegisterComponents below - deliberately. Every
+        // system lives in THIS instance's own m_SystemMgr (an ordinary instance member, never a
+        // static/shared table - see the xECSV2 type-registration architecture plan's Phase 1 note),
+        // so there is no cross-binary "who owns this registration" question to answer: a plugin
+        // reload destroys and recreates the whole game_mgr::instance (Phase 8A), which already
+        // detaches every system that instance ever registered, for free, with no extra bookkeeping.
         template
         < typename...T_SYSTEMS
         > requires
@@ -22,10 +28,16 @@ namespace xecs::game_mgr
         )
         void                                RegisterSystems         ( void
                                                                     ) noexcept;
+        // Optional Owner defaults to xecs::plugin::host_v, so every existing call site keeps
+        // compiling and behaving exactly as before - only a future plugin loader ever passes a
+        // non-host token. Components DO need this (unlike systems, just above): the type-info
+        // registry they mutate (xecs::component::mgr::s_Registry) is process-wide static state,
+        // shared by every game_mgr::instance in the binary - see xecs_component_mgr.h's own
+        // ownership-tracking comment.
         template
         < typename...T_COMPONENTS
-        > 
-        void                                RegisterComponents      ( void
+        >
+        void                                RegisterComponents      ( xecs::plugin::token Owner = xecs::plugin::host_v
                                                                     ) noexcept;
         template
         < typename...T_GLOBAL_EVENTS
@@ -175,9 +187,16 @@ namespace xecs::game_mgr
         bool                                Foreach                 ( const std::vector<const xecs::archetype::instance*>&   List
                                                                     , T_FUNCTION&&                                           Function 
                                                                     ) noexcept;
-        void                                Run                     ( void 
+        void                                Run                     ( void
                                                                     ) noexcept;
-        void                                Stop                    ( void 
+        void                                Stop                    ( void
+                                                                    ) noexcept;
+        // Forwards to xecs::component::mgr::UnregisterPlugin - see that method's own comment for
+        // exactly what it does (and does not yet do). The API a future plugin loader actually calls
+        // as part of Phase 8A's teardown sequence, kept on instance for symmetry with
+        // RegisterComponents above rather than making callers reach into m_ComponentMgr directly.
+        inline
+        void                                UnregisterPlugin        ( xecs::plugin::token Token
                                                                     ) noexcept;
         template
         < typename T_SYSTEM

@@ -113,6 +113,7 @@ struct std::hash<xresource::guid<T>>
 //--------------------------------------------------------------
 #include "xecs_tools_meta.h"
 #include "xecs_settings.h"
+#include "xecs_plugin_token.h"
 #include "xecs_event.h"
 #include "xecs_event_mgr.h"
 #include "xecs_component_type.h"
