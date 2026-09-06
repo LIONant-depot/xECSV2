@@ -63,7 +63,7 @@ namespace xecs::persist::details
         for( auto pInfo : DataSpan )
         {
             if( pInfo->m_ReferenceMode == xecs::component::type::reference_mode::NO_REFERENCES
-             || pInfo == &xecs::component::type::info_v<xecs::component::entity> )
+             || xecs::component::type::IsComponentType<xecs::component::entity>(pInfo) )
                 continue;
 
             auto pData = IDetails.m_pPool->getComponentInSequenceByInfo( *pInfo, IDetails.m_PoolIndex, iSequence );
@@ -140,7 +140,7 @@ namespace xecs::persist::details
         OutArchetypeInfos.push_back( &xecs::component::type::info_v<xecs::component::entity> );
         for( auto pInfo : Infos ) OutArchetypeInfos.push_back(pInfo);
 
-        const bool bIsPrefabInstance = std::find(Infos.begin(), Infos.end(), &xecs::component::type::info_v<xecs::editor::prefab_instance>) != Infos.end();
+        const bool bIsPrefabInstance = std::find_if(Infos.begin(), Infos.end(), xecs::component::type::IsComponentType<xecs::editor::prefab_instance>) != Infos.end();
         if( false == bIsPrefabInstance ) return {};
 
         if( auto Err = SerializeOneComponent(TextFile, true, xecs::component::type::info_v<xecs::editor::prefab_instance>, reinterpret_cast<std::byte*>(&OutTempPI)); Err )
@@ -159,7 +159,7 @@ namespace xecs::persist::details
         auto& RootArchetype = *RootDetails.m_pPool->m_pArchetype;
         for( auto pRootInfo : RootArchetype.getDataComponentInfos() )
         {
-            if( pRootInfo == &xecs::component::type::info_v<xecs::component::entity> ) continue;
+            if( xecs::component::type::IsComponentType<xecs::component::entity>(pRootInfo) ) continue;
 
             // xecs::prefab::root is the INNER prefab's OWN bookkeeping (its guid, its variant-parent
             // guid) - never something a caller unions in as a baseline default. Every prior use of this
@@ -171,7 +171,7 @@ namespace xecs::persist::details
             // component in the archetype's info list that corrupts the resulting pool's per-component
             // storage indexing (same class of bug this session's own [[xecs_pool_reallocation_hazard]]
             // catalog exists for, just from a duplicate entry rather than a stale reference).
-            if( pRootInfo == &xecs::component::type::info_v<xecs::prefab::root> ) continue;
+            if( xecs::component::type::IsComponentType<xecs::prefab::root>(pRootInfo) ) continue;
 
             // xecs::component::children is STRUCTURAL, PER-INSTANCE data (this entity's OWN actually-
             // registered children), never a plain value reconstructable from the referenced prefab's
@@ -181,7 +181,7 @@ namespace xecs::persist::details
             // resolve at render time and show as an expandable-but-empty row. Matches the SAME exclusion
             // ComputePrefabInstanceSaveOverlay's own save-side union now applies, for the identical
             // reason - see [[xecs_multientity_prefab_architecture]]'s own note on this bug.
-            if( pRootInfo == &xecs::component::type::info_v<xecs::component::children> ) continue;
+            if( xecs::component::type::IsComponentType<xecs::component::children>(pRootInfo) ) continue;
 
             if( std::find(OutArchetypeInfos.begin(), OutArchetypeInfos.end(), pRootInfo) != OutArchetypeInfos.end() ) continue;
 
@@ -216,7 +216,7 @@ namespace xecs::persist::details
 
         for( auto pInfo : ArchetypeInfos )
         {
-            if( pInfo == &xecs::component::type::info_v<xecs::component::entity> ) continue;
+            if( xecs::component::type::IsComponentType<xecs::component::entity>(pInfo) ) continue;
 
             const auto iSrcType = RootDetails.m_pPool->findIndexComponentFromInfo(*pInfo);
             const auto iDstType = Pool.findIndexComponentFromInfo(*pInfo);
@@ -457,7 +457,7 @@ namespace xecs::persist::details
                 auto& RootDetails = GameMgr.m_ComponentMgr.getEntityDetails(RootIt->second);
                 for( auto pRootInfo : RootDetails.m_pPool->m_pArchetype->getDataComponentInfos() )
                 {
-                    if( pRootInfo == &xecs::component::type::info_v<xecs::prefab::root> ) continue;
+                    if( xecs::component::type::IsComponentType<xecs::prefab::root>(pRootInfo) ) continue;
 
                     // xecs::component::children is STRUCTURAL, PER-INSTANCE data - never something
                     // reconstructable from the prefab's own static definition the way an ordinary
@@ -468,7 +468,7 @@ namespace xecs::persist::details
                     // instantiated multi-entity prefab's children vanished from the Level tree after a
                     // save+reload, since those copied handles were never scene-registered at all -
                     // direct user report).
-                    if( pRootInfo == &xecs::component::type::info_v<xecs::component::children> ) continue;
+                    if( xecs::component::type::IsComponentType<xecs::component::children>(pRootInfo) ) continue;
 
                     OutPrefabOwnedGuids.push_back(pRootInfo->m_Guid.m_Value);
                 }
@@ -478,16 +478,16 @@ namespace xecs::persist::details
         OutInfosToWrite.reserve(DataSpan.size());
         for( auto pInfo : DataSpan )
         {
-            if( pInfo == &xecs::component::type::info_v<xecs::component::entity> ) continue;
+            if( xecs::component::type::IsComponentType<xecs::component::entity>(pInfo) ) continue;
 
-            if( pPI != nullptr && pInfo != &xecs::component::type::info_v<xecs::editor::prefab_instance>
+            if( pPI != nullptr && !xecs::component::type::IsComponentType<xecs::editor::prefab_instance>(pInfo)
              && std::find(OutPrefabOwnedGuids.begin(), OutPrefabOwnedGuids.end(), pInfo->m_Guid.m_Value) != OutPrefabOwnedGuids.end() )
                 continue;
 
             OutInfosToWrite.push_back(pInfo);
         }
 
-        if( auto It = std::find(OutInfosToWrite.begin(), OutInfosToWrite.end(), &xecs::component::type::info_v<xecs::editor::prefab_instance>); It != OutInfosToWrite.end() && It != OutInfosToWrite.begin() )
+        if( auto It = std::find_if(OutInfosToWrite.begin(), OutInfosToWrite.end(), xecs::component::type::IsComponentType<xecs::editor::prefab_instance>); It != OutInfosToWrite.end() && It != OutInfosToWrite.begin() )
             std::iter_swap(OutInfosToWrite.begin(), It);
 
         return pPI != nullptr;
@@ -514,8 +514,8 @@ namespace xecs::persist::details
         InOutScratchPI.m_ComponentDiffs.clear();
         for( auto pInfo2 : DataSpan )
         {
-            if( pInfo2 == &xecs::component::type::info_v<xecs::component::entity> ) continue;
-            if( pInfo2 == &xecs::component::type::info_v<xecs::editor::prefab_instance> ) continue;
+            if( xecs::component::type::IsComponentType<xecs::component::entity>(pInfo2) ) continue;
+            if( xecs::component::type::IsComponentType<xecs::editor::prefab_instance>(pInfo2) ) continue;
             if( std::find(PrefabOwnedGuids.begin(), PrefabOwnedGuids.end(), pInfo2->m_Guid.m_Value) == PrefabOwnedGuids.end() )
                 InOutScratchPI.m_ComponentDiffs.push_back(xecs::editor::prefab_component_diff{ .m_ComponentTypeGuid = pInfo2->m_Guid.m_Value, .m_bAdded = true });
         }

@@ -198,7 +198,7 @@ namespace xecs::archetype
 #ifdef _DEBUG
         {
             // First component should the the entity
-            assert(m_InfoArray[0] == &xecs::component::type::info_v<xecs::component::entity>);
+            assert(xecs::component::type::IsComponentType<xecs::component::entity>(m_InfoArray[0]));
 
             // Entity bit should be turn on
             assert(AllComponentsBits.getBit(xecs::component::type::info_v<xecs::component::entity>.m_BitID));
@@ -501,7 +501,7 @@ namespace xecs::archetype
         assert( m_nShareComponents == Family.m_ShareInfos.size() );
         for( int i=0, end = m_nShareComponents; i!=end; ++i )
         {
-            if( Family.m_ShareInfos[i] == &xecs::component::type::info_v<T> )
+            if( xecs::component::type::IsComponentType<T>(Family.m_ShareInfos[i]) )
             {
                 const auto& ShareDetails = Family.m_ShareDetails[i];
                 const auto& GlobalEntity = m_Mgr.m_GameMgr.m_ComponentMgr.getEntityDetails(ShareDetails.m_Entity);
@@ -881,7 +881,7 @@ instance::_CreateEntities
             return std::array
             { [&]<typename J>(J*) constexpr noexcept
                 {
-                    while( m_InfoArray[Sequence] != &xecs::component::type::info_v<J> ) Sequence++;
+                    while( !xecs::component::type::IsComponentType<J>(m_InfoArray[Sequence]) ) Sequence++;
                     return Sequence;
                 }(reinterpret_cast<T*>(0))
                 ...

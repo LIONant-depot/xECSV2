@@ -155,6 +155,22 @@ namespace xecs::component::type
     template< typename T_COMPONENT >
     requires( type::is_valid_v<xecs::types::decay_full_t<T_COMPONENT>> )
     constexpr auto& info_v = details::info_var<xecs::types::decay_full_t<T_COMPONENT>>::value;
+
+    // GUID-by-value identity check for a runtime-discovered `info*` against a specific, compile-
+    // time-known component type T - the safe replacement for `pInfo == &info_v<T>` (or `!=`), which
+    // silently assumes there is exactly one `info_v<T>` address per type. That's true only within a
+    // single binary - an empirical, built-and-run test (see the xECSV2 DLL-boundary audit) proved
+    // two binaries that both reference the same T get two different `info_v<T>` addresses, so any
+    // comparison keyed on the address (rather than the type's stable m_Guid) silently breaks the
+    // moment a second binary is involved. `pInfo == nullptr` is deliberately never a match (matches
+    // every prior call site's own implicit assumption that pInfo is always a valid component of
+    // SOME type - this only ever answers "is it type T", not "is it null").
+    template< typename T_COMPONENT >
+    requires( type::is_valid_v<xecs::types::decay_full_t<T_COMPONENT>> )
+    constexpr bool IsComponentType( const info* pInfo ) noexcept
+    {
+        return pInfo != nullptr && pInfo->m_Guid == info_v<T_COMPONENT>.m_Guid;
+    }
 }
 
 template<>

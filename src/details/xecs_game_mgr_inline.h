@@ -249,7 +249,7 @@ namespace xecs::game_mgr
                                 else 
                                 {
                                     int n = i;
-                                    while( Family.m_ShareInfos[i] != &xecs::component::type::info_v<T> )
+                                    while( !xecs::component::type::IsComponentType<T>(Family.m_ShareInfos[i]) )
                                     {
                                         i++;
                                         if (i >= Family.m_ShareInfos.size())
@@ -262,7 +262,7 @@ namespace xecs::game_mgr
                             }
                             else
                             {
-                                while( Family.m_ShareInfos[i] != &xecs::component::type::info_v<T> ) i++;
+                                while( !xecs::component::type::IsComponentType<T>(Family.m_ShareInfos[i]) ) i++;
                             }
 
                             auto Entity = Family.m_ShareDetails[i].m_Entity;
@@ -330,12 +330,12 @@ namespace xecs::game_mgr
                         {
                             if constexpr (std::is_pointer_v< std::tuple_element< xecs::types::tuple_t2i_v<T_SHARE, shares_t>, sorted_shares_t > >)
                             {
-                                while (Family.m_ShareInfos[i] != &xecs::component::type::info_v<T_SHARE>) ++i;
+                                while (!xecs::component::type::IsComponentType<T_SHARE>(Family.m_ShareInfos[i])) ++i;
                             }
                             else
                             {
                                 int n = i;
-                                while (Family.m_ShareInfos[i] != &xecs::component::type::info_v<T_SHARE>)
+                                while (!xecs::component::type::IsComponentType<T_SHARE>(Family.m_ShareInfos[i]))
                                 {
                                     i++;
                                     if (i == static_cast<int>(Family.m_ShareInfos.size()))

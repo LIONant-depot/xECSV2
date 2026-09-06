@@ -366,8 +366,8 @@ namespace xecs::prefab
                 {
                     // If we don't need to deal with remapping things then lets move on
                     if( pInfo->m_ReferenceMode == xecs::component::type::reference_mode::NO_REFERENCES 
-                       || pInfo == &xecs::component::type::info_v<xecs::component::children>
-                       || pInfo == &xecs::component::type::info_v<xecs::component::parent>)
+                       || xecs::component::type::IsComponentType<xecs::component::children>(pInfo)
+                       || xecs::component::type::IsComponentType<xecs::component::parent>(pInfo))
                         continue;
 
                     // get the component data
@@ -528,11 +528,11 @@ namespace xecs::prefab
         std::vector<const xecs::component::type::info*> ExtraInfos;
         for( auto pInfo : EDetails.m_pPool->m_pArchetype->getDataComponentInfos() )
         {
-            if( pInfo == &xecs::component::type::info_v<xecs::component::entity> )      continue;
-            if( pInfo == &xecs::component::type::info_v<xecs::editor::prefab_instance> ) continue;
-            if( pInfo == &xecs::component::type::info_v<xecs::component::parent> )       continue;
-            if( pInfo == &xecs::component::type::info_v<xecs::component::children> )    continue;   // a nested-instance member never has its own - see CloneEntityIntoPrefabGroup's opaque-leaf exclusion
-            if( pInfo == &xecs::component::type::info_v<xecs::prefab::root> )           continue;   // Entity's own group-root identity, if any - never carried by a PLACED instance
+            if( xecs::component::type::IsComponentType<xecs::component::entity>(pInfo) )      continue;
+            if( xecs::component::type::IsComponentType<xecs::editor::prefab_instance>(pInfo) ) continue;
+            if( xecs::component::type::IsComponentType<xecs::component::parent>(pInfo) )       continue;
+            if( xecs::component::type::IsComponentType<xecs::component::children>(pInfo) )    continue;   // a nested-instance member never has its own - see CloneEntityIntoPrefabGroup's opaque-leaf exclusion
+            if( xecs::component::type::IsComponentType<xecs::prefab::root>(pInfo) )           continue;   // Entity's own group-root identity, if any - never carried by a PLACED instance
             if( InnerDetails.m_pPool->findIndexComponentFromInfo(*pInfo) >= 0 )          continue;   // the inner prefab already defines this - not an "extra"
             ExtraInfos.push_back(pInfo);
         }
@@ -884,7 +884,7 @@ AddOrRemoveComponents
             // xecs::prefab::root never gets its own data section (its m_Guid is redundant with the
             // file's own location, matching the original single-entity design) - only the root member
             // ever carries this component at all, so this is a no-op for every other member.
-            std::erase( Infos, &xecs::component::type::info_v<xecs::prefab::root> );
+            std::erase_if( Infos, xecs::component::type::IsComponentType<xecs::prefab::root> );
 
             local_id WriteId      = Id;
             int      nComponents = static_cast<int>(Infos.size());
@@ -988,7 +988,7 @@ AddOrRemoveComponents
                     }
                 }
 
-                if( pInfo == &xecs::component::type::info_v<xecs::editor::prefab_instance> )
+                if( xecs::component::type::IsComponentType<xecs::editor::prefab_instance>(pInfo) )
                 {
                     auto& PI_Scratch = *reinterpret_cast<xecs::editor::prefab_instance*>(Scratch.data());
                     xecs::persist::details::RefreshPrefabInstanceOverlayRecord( GameMgr, Entity, DataSpan, PrefabOwnedGuids, PI_Scratch );
@@ -1093,7 +1093,7 @@ AddOrRemoveComponents
 
             for( auto pInfo : Infos )
             {
-                if( pInfo == &xecs::component::type::info_v<xecs::editor::prefab_instance> )
+                if( xecs::component::type::IsComponentType<xecs::editor::prefab_instance>(pInfo) )
                 {
                     Pool.getComponent<xecs::editor::prefab_instance>(EDetails.m_PoolIndex) = std::move(TempPI);
                     continue;
@@ -1148,12 +1148,12 @@ AddOrRemoveComponents
         if( bIsRoot ) Infos.push_back( &xecs::component::type::info_v<xecs::prefab::root> );
         for( auto pInfo : DataSpan )
         {
-            if( pInfo == &xecs::component::type::info_v<xecs::component::entity> ) continue;
+            if( xecs::component::type::IsComponentType<xecs::component::entity>(pInfo) ) continue;
             // A prefab root never carries its own parent link - it's the top of ITS OWN hierarchy,
             // regardless of whether the live entity being converted happened to have one before
             // conversion (E29's "Make Prefab" UI is responsible for reparenting the live scene entity
             // BEFORE calling this - this exclusion only concerns the CLONE).
-            if( bIsRoot && pInfo == &xecs::component::type::info_v<xecs::component::parent> ) continue;
+            if( bIsRoot && xecs::component::type::IsComponentType<xecs::component::parent>(pInfo) ) continue;
             Infos.push_back(pInfo);
         }
 
@@ -1193,9 +1193,9 @@ AddOrRemoveComponents
         // genuine nested-prefab-instance record once persisted, with no special-casing needed here.
         for( auto pInfo : DataSpan )
         {
-            if( pInfo == &xecs::component::type::info_v<xecs::component::entity> )   continue;
-            if( pInfo == &xecs::component::type::info_v<xecs::component::parent> )   continue;
-            if( pInfo == &xecs::component::type::info_v<xecs::component::children> ) continue;
+            if( xecs::component::type::IsComponentType<xecs::component::entity>(pInfo) )   continue;
+            if( xecs::component::type::IsComponentType<xecs::component::parent>(pInfo) )   continue;
+            if( xecs::component::type::IsComponentType<xecs::component::children>(pInfo) ) continue;
 
             const auto iSrcType = SourceDetails.m_pPool->findIndexComponentFromInfo(*pInfo);
             const auto iDstType = NewPool.findIndexComponentFromInfo(*pInfo);
@@ -1301,7 +1301,7 @@ AddOrRemoveComponents
             auto& MDetails = m_GameMgr.m_ComponentMgr.getEntityDetails(Member);
             for( auto pInfo : MDetails.m_pPool->m_pArchetype->getDataComponentInfos() )
             {
-                if( pInfo == &xecs::component::type::info_v<xecs::component::entity> ) continue;
+                if( xecs::component::type::IsComponentType<xecs::component::entity>(pInfo) ) continue;
                 if( std::find(Descriptor.m_ComponentTypeGuids.begin(), Descriptor.m_ComponentTypeGuids.end(), pInfo->m_Guid.m_Value) == Descriptor.m_ComponentTypeGuids.end() )
                     Descriptor.m_ComponentTypeGuids.push_back(pInfo->m_Guid.m_Value);
             }

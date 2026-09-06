@@ -237,7 +237,7 @@ namespace xecs::scene
 
             for( auto pInfo : Infos )
             {
-                if( pInfo == &xecs::component::type::info_v<xecs::editor::prefab_instance> )
+                if( xecs::component::type::IsComponentType<xecs::editor::prefab_instance>(pInfo) )
                 {
                     // TempPI already holds this component's fully-parsed data (read once, above,
                     // before the archetype even existed, and always first - SaveEntity guarantees it)
@@ -617,7 +617,7 @@ namespace xecs::scene
                 }
             }
 
-            if( pInfo == &xecs::component::type::info_v<xecs::editor::prefab_instance> )
+            if( xecs::component::type::IsComponentType<xecs::editor::prefab_instance>(pInfo) )
             {
                 auto& PI_Scratch = *reinterpret_cast<xecs::editor::prefab_instance*>(Scratch.data());
                 xecs::persist::details::RefreshPrefabInstanceOverlayRecord( m_GameMgr, Entity, DataSpan, PrefabOwnedGuids, PI_Scratch );
