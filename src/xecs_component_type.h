@@ -120,6 +120,23 @@ namespace xecs::component::type
         using compute_key_fn    = share::compute_key_fn;
 
         const type::guid            m_Guid;                 // Unique Identifier for the component type
+        // m_BitID/m_DefaultShareKey are runtime-assigned (by component::mgr::RegisterComponent,
+        // written back here) onto what's otherwise a compile-time singleton (info_v<T>, one per
+        // linked binary/module - see its own declaration comment below). Safe as-is, PROVIDED only
+        // one physical binary ever names/registers this T: true for every game/consumer-defined
+        // component type (the editor only ever touches an unknown type generically, through this
+        // same `info*`, never by independently instantiating info_v<ThatType> itself), and true for
+        // today's single-binary (static/included-source) build regardless of type. The one case
+        // that needs care is xECSV2's OWN built-in types that multiple modules must reference by
+        // name (entity, parent, children, share_as_data_exclusive_tag, ref_count, share_filter,
+        // prefab::tag, prefab::root, editor::prefab_instance, component::entity_reference) once
+        // xECSV2 is ALSO built as a shared library - those need an explicit
+        // instantiation+export/import (`extern template ... info_var<T>;` + one exported definition
+        // inside xECSV2 itself) so every module imports the SAME instantiation instead of silently
+        // creating its own; see the xECSV2 type-registration architecture plan's own Phase 4/7 for
+        // the full reasoning and the exact type list. Deliberately NOT routed through a registry
+        // lookup for every access - that would cost real hot-path performance for a safety property
+        // this direct, mutable field already has under the stated invariant.
         mutable std::uint16_t       m_BitID;                // Which bit was allocated for this type at run time
         const std::uint16_t         m_Size;                 // Size of the component in bytes
         const type::id              m_TypeID;               // Simple enumeration that tells what type of component is this
@@ -134,7 +151,7 @@ namespace xecs::component::type
         full_serialize_fn* const    m_pSerilizeFn;          // This is the serialize function
         report_references_fn* const m_pReportReferencesFn;  // This is a callback to report references for components that have references to other entities
         const xproperty::type::object* m_pPropertyTable;    // Properties for the component
-        mutable type::share::key    m_DefaultShareKey;      // Default value for this share component
+        mutable type::share::key    m_DefaultShareKey;      // Default value for this share component - same cross-module invariant as m_BitID above
         serialize_mode              m_SerializeMode;        // Tells the component how it should serialize itself
         reference_mode              m_ReferenceMode;        // Tells if the component has references and if so how to resolve them
         const char* const           m_pName;                // Friendly Human readable string name for the component type
@@ -152,6 +169,14 @@ namespace xecs::component::type
         };
     }
 
+    // One compile-time singleton per (T_COMPONENT, linked binary/module) - `info_var<T>::value` is a
+    // genuine C++17 `inline static` CLASS member, so it's already correctly ODR-merged across every
+    // translation unit WITHIN one program (confirmed: xecs.cpp and E29's own .cpp are separate TUs
+    // in the same xGPU_unit_test.exe and have shared this state correctly all session - this is NOT
+    // the same bug class as xecs_scene_descriptor.h's own g_Factory, which was a namespace-scope
+    // static). It only becomes "one per module" - i.e. a second, independent copy - the moment a
+    // SECOND, separately linked binary (a DLL) also instantiates info_v<T_COMPONENT> for the same T.
+    // See info::m_BitID's own comment for exactly when that matters and what to do about it.
     template< typename T_COMPONENT >
     requires( type::is_valid_v<xecs::types::decay_full_t<T_COMPONENT>> )
     constexpr auto& info_v = details::info_var<xecs::types::decay_full_t<T_COMPONENT>>::value;

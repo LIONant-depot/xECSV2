@@ -131,6 +131,13 @@ namespace xecs::system
             using destroy_fn            = void( xecs::system::instance& ) noexcept;
 
             const type::guid                        m_Guid;
+            // Runtime-computed (by system::mgr::RegisterSystem), written back onto what's otherwise
+            // a compile-time singleton - same invariant as component::type::info::m_BitID (see its
+            // own comment): safe as long as only one binary ever names/registers this T_SYSTEM, which
+            // is every system in practice - xECSV2 ships NO built-in system types of its own
+            // (RegisterSystems<T...>() is always instantiated with types the CONSUMER supplies), so
+            // unlike the handful of built-in component types, there is no case here that will ever
+            // need the explicit-instantiation/export treatment a shared-library build requires.
             mutable xecs::query::instance           m_Query;
             notifier_registration* const            m_NotifierRegistration;
             destroy_fn* const                       m_DestroyFunction;
