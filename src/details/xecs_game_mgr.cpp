@@ -99,6 +99,25 @@ namespace xecs::game_mgr
         xecs::serializer::stream    TextFile;
         xerr                        Error;
 
+        // NOT xecs::component::type::info_v<xecs::prefab::tag>.m_BitID directly - this function is
+        // XECS_API (its body is compiled exactly ONCE, into xECSV2.dll, unlike every Scene/Level/
+        // Prefab persistence function, which stays `inline` and gets recompiled into whichever binary
+        // calls it - always the host EXE in this project, the same binary that also does every
+        // RegisterComponents<T...>()/RegisterSystems<T...>() call). info_v<T> is a per-BINARY inline
+        // static for a built-in type (confirmed empirically during Phase 7 - see this same type's own
+        // m_BitID field comment in xecs_component_type.h): the EXE's own copy gets correctly
+        // registered/locked (since registration always happens via EXE-side template instantiation),
+        // but xECSV2.dll's OWN, separate copy - the one this function's compiled-once body actually
+        // reads when named directly - never does, and sits forever at its sentinel value. Confirmed
+        // live: a Game.dll reload while a play session was active called this function for the first
+        // time in the actual shared-library build and hit exactly this - "Bit >= 0 && Bit < max"
+        // asserting on a 5-digit sentinel bit. m_Guid, unlike m_BitID, is a compile-time constant
+        // never runtime-mutated, so it IS identical across every binary that instantiates info_v<T> -
+        // resolving through it via the registry (itself correctly XECS_API-shared) sidesteps the
+        // whole per-binary-storage problem instead of reaching for the unsafe field directly.
+        const auto* pPrefabTagInfo = m_ComponentMgr.findComponentTypeInfo(xecs::component::type::info_v<xecs::prefab::tag>.m_Guid);
+        const int   PrefabTagBit   = pPrefabTagInfo ? pPrefabTagInfo->m_BitID : xecs::component::type::info::invalid_bit_id_v;
+
         //
         // Make sure that we are all up to date
         //
@@ -127,7 +146,7 @@ namespace xecs::game_mgr
             int Count = 0;
             for( const auto& E : m_ArchetypeMgr.m_lArchetype )
             {
-                if( false == E->getComponentBits().getBit( xecs::component::type::info_v<xecs::prefab::tag>.m_BitID) )
+                if( false == E->getComponentBits().getBit( PrefabTagBit) )
                 {
                     Count++;
                 }
@@ -212,7 +231,7 @@ namespace xecs::game_mgr
         for( int iArchetype=0; iArchetype < ArchetypeCount; ++iArchetype)
         {
             // When writing we want to filter out any prefab archetype
-            if( false == isRead && m_ArchetypeMgr.m_lArchetype[iArchetype]->getComponentBits().getBit(xecs::component::type::info_v<xecs::prefab::tag>.m_BitID))
+            if( false == isRead && m_ArchetypeMgr.m_lArchetype[iArchetype]->getComponentBits().getBit(PrefabTagBit))
                 continue;
 
             //

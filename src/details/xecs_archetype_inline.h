@@ -200,8 +200,10 @@ namespace xecs::archetype
             // First component should the the entity
             assert(xecs::component::type::IsComponentType<xecs::component::entity>(m_InfoArray[0]));
 
-            // Entity bit should be turn on
-            assert(AllComponentsBits.getBit(xecs::component::type::info_v<xecs::component::entity>.m_BitID));
+            // Entity bit should be turn on - resolved by GUID, not info_v<T>.m_BitID directly, since
+            // this can run from within an XECS_API/DLL-resident caller (SerializeGameState) - see
+            // its own comment for the full account.
+            assert(AllComponentsBits.getBit(m_Mgr.m_GameMgr.m_ComponentMgr.findComponentTypeInfo(xecs::component::type::info_v<xecs::component::entity>.m_Guid)->m_BitID));
 
             // Check all other components
             for (int i = 1; i < nInfos; ++i)
@@ -219,8 +221,9 @@ namespace xecs::archetype
         // We initialize the remaining vars
         //
 
-        // Is the user telling us not ignore the shares?
-        if( AllComponentsBits.getBit(xecs::component::type::info_v<xecs::component::share_as_data_exclusive_tag>.m_BitID) ) m_nShareComponents = 0;
+        // Is the user telling us not ignore the shares? - GUID-resolved, see the entity-bit check
+        // above for why direct info_v<T>.m_BitID access isn't safe here.
+        if( AllComponentsBits.getBit(m_Mgr.m_GameMgr.m_ComponentMgr.findComponentTypeInfo(xecs::component::type::info_v<xecs::component::share_as_data_exclusive_tag>.m_Guid)->m_BitID) ) m_nShareComponents = 0;
 
         // Setup the last few bits
         m_ComponentBits   = AllComponentsBits;
@@ -245,7 +248,7 @@ namespace xecs::archetype
                 , xecs::component::ref_count
                 , xecs::component::share_as_data_exclusive_tag
                 >();
-                if(m_InfoArray[m_nDataComponents + i]->m_bBuildShareFilter) ShareEntityBits.setBit(xecs::component::type::info_v<xecs::component::share_filter>.m_BitID);
+                if(m_InfoArray[m_nDataComponents + i]->m_bBuildShareFilter) ShareEntityBits.setBit(m_Mgr.m_GameMgr.m_ComponentMgr.findComponentTypeInfo(xecs::component::type::info_v<xecs::component::share_filter>.m_Guid)->m_BitID);
                 ShareEntityBits.setBit(m_InfoArray[m_nDataComponents + i]->m_BitID);
 
                 m_ShareArchetypesArray[i] = &m_Mgr.getOrCreateArchetype(ShareEntityBits);

@@ -108,8 +108,17 @@ namespace xecs::game_mgr
         for( auto& e : Types )
             Bits.setBit( e->m_BitID );
 
-        // Make sure we always include the entity
-        Bits.setBit( xecs::component::type::info_v<xecs::component::entity>.m_BitID );
+        // Make sure we always include the entity - resolved by GUID through the registry, NOT
+        // xecs::component::type::info_v<xecs::component::entity>.m_BitID directly: this function is
+        // `inline` (compiled per-TU/per-binary), and when its CALLER is itself compiled into a
+        // different binary than the one that did the registering (e.g. xecs::game_mgr::instance::
+        // SerializeGameState, an XECS_API/DLL-resident function - see its own comment for the full
+        // account), the direct-by-name expression resolves to THAT binary's own, separate,
+        // never-registered copy of this built-in type's info_v<T>, not the one the registry actually
+        // populated. m_Guid is a compile-time constant (identical in every binary); findComponentTypeInfo
+        // returns the pointer the registry actually holds (whichever binary registered it), so
+        // dereferencing ITS m_BitID is safe regardless of which binary's code is doing the dereferencing.
+        Bits.setBit( m_ComponentMgr.findComponentTypeInfo(xecs::component::type::info_v<xecs::component::entity>.m_Guid)->m_BitID );
 
         return m_ArchetypeMgr.getOrCreateArchetype(Bits);
     }

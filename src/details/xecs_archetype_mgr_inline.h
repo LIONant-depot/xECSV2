@@ -20,8 +20,12 @@ mgr::getOrCreateArchetype
     {
         xecs::archetype::guid ArchetypeGuid{ ComponentBits.GenerateUniqueID() };
 
-        // Make sure the entity is part of the list at this point
-        assert(ComponentBits.getBit(xecs::component::type::info_v<xecs::component::entity>.m_BitID) );
+        // Make sure the entity is part of the list at this point - resolved by GUID through the
+        // registry, not info_v<xecs::component::entity>.m_BitID directly: this function can be
+        // reached from an XECS_API/DLL-resident caller (xecs::game_mgr::instance::SerializeGameState),
+        // whose compiled-once body would otherwise read ITS OWN binary's separate, never-registered
+        // copy of this built-in's info_v<T> - see SerializeGameState's own comment for the full account.
+        assert(ComponentBits.getBit(m_GameMgr.m_ComponentMgr.findComponentTypeInfo(xecs::component::type::info_v<xecs::component::entity>.m_Guid)->m_BitID) );
 
         // Return the archetype
         if( auto I = m_ArchetypeMap.find(ArchetypeGuid); I != m_ArchetypeMap.end() )
