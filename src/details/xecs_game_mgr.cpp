@@ -22,24 +22,6 @@ namespace xecs::component
     xecs::component::type::registry mgr::s_Registry{};
 }
 
-// The one, physical explicit-instantiation DEFINITION for each of xECSV2's own built-in component
-// types - see xecs_builtin_instantiations.h's `extern template` declarations (visible to every
-// other translation unit) for why. Same "guaranteed compiled exactly once per binary" reasoning as
-// mgr::s_Registry just above applies here too.
-namespace xecs::component::type::details
-{
-    template struct XECS_API info_var<xecs::component::entity>;
-    template struct XECS_API info_var<xecs::component::parent>;
-    template struct XECS_API info_var<xecs::component::children>;
-    template struct XECS_API info_var<xecs::component::share_as_data_exclusive_tag>;
-    template struct XECS_API info_var<xecs::component::ref_count>;
-    template struct XECS_API info_var<xecs::component::share_filter>;
-    template struct XECS_API info_var<xecs::component::entity_reference>;
-    template struct XECS_API info_var<xecs::prefab::tag>;
-    template struct XECS_API info_var<xecs::prefab::root>;
-    template struct XECS_API info_var<xecs::editor::prefab_instance>;
-}
-
 namespace xecs::game_mgr
 {
     //---------------------------------------------------------------------------

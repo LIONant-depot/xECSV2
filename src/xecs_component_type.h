@@ -130,13 +130,43 @@ namespace xecs::component::type
         // that needs care is xECSV2's OWN built-in types that multiple modules must reference by
         // name (entity, parent, children, share_as_data_exclusive_tag, ref_count, share_filter,
         // prefab::tag, prefab::root, editor::prefab_instance, component::entity_reference) once
-        // xECSV2 is ALSO built as a shared library - those need an explicit
-        // instantiation+export/import (`extern template ... info_var<T>;` + one exported definition
-        // inside xECSV2 itself) so every module imports the SAME instantiation instead of silently
-        // creating its own; see the xECSV2 type-registration architecture plan's own Phase 4/7 for
-        // the full reasoning and the exact type list. Deliberately NOT routed through a registry
-        // lookup for every access - that would cost real hot-path performance for a safety property
-        // this direct, mutable field already has under the stated invariant.
+        // xECSV2 is ALSO built as a shared library AND a second module (Game.dll, Phase 8) also
+        // independently names one of these types.
+        //
+        // Phase 7 attempted the obvious fix - explicit instantiation of info_var<T> for these 10,
+        // decorated dllexport/dllimport - and hit a real, confirmed MSVC limitation: `value` is a
+        // C++17 `inline static constexpr` member, and MSVC's "inline variable" vague-linkage model
+        // for such members does not participate in a class template's explicit-instantiation
+        // dllexport/dllimport mechanism the way an ordinary (non-inline) static data member, or an
+        // ordinary member FUNCTION on the very same template (confirmed via its own operator=),
+        // does - confirmed with an isolated minimal repro outside xECS's own headers entirely, and
+        // reproduced again after replacing `value` with a plain (non-inline, non-constexpr) `static
+        // const info` via full template specialization: `info_var<T>::value` itself then correctly
+        // exports/imports (verified via `dumpbin /exports` and object-file symbol inspection - the
+        // reference DOES route through the `__imp_` thunk when accessed directly), but info_v<T>
+        // itself (`constexpr auto& info_v = details::info_var<T>::value;`, declared just below) is
+        // now ALSO its own separate inline variable, and reading THROUGH it - even a plain
+        // `info_v<T>.m_Guid`, no address-of needed - was independently confirmed (same repro
+        // methodology) to still silently produce a plain, non-imported reference regardless of
+        // `value`'s own correct export/import decoration. Attempting to fix info_v<T> itself the
+        // same way (a full specialization, non-constexpr, `extern`-declared) hit a genuine C++
+        // language-rule wall: reference variables cannot be `extern`-declared-then-defined through
+        // explicit template specialization the way ordinary objects can (MSVC C2530/C2766).
+        //
+        // Deferred to Phase 8, deliberately, rather than solved here: there is no second binary yet
+        // (Game.dll) that actually needs to independently name one of these 10 types, so nothing in
+        // today's single-consumer (xGPU_unit_test only) shared-library configuration is actually
+        // broken by leaving these 10 on the ordinary, single-binary-safe primary template just like
+        // every game-defined type - each binary that touches them gets its own self-consistent
+        // local copy, exactly like today's default build. Phase 8, once it has an actual second
+        // module to link and test against, should solve this with a real accessor-FUNCTION-based
+        // indirection (confirmed working for ordinary member functions above) rather than trying to
+        // export the raw data member/reference directly - i.e. route info_v<T> for these 10 through
+        // a properly dllexport/dllimport'd function call instead of a directly-bound reference
+        // variable, and validate the fix against Game.dll rather than a synthetic repro. Deliberately
+        // NOT routed through a runtime registry lookup for every access either way - that would cost
+        // real hot-path performance for a safety property this direct, mutable field already has
+        // under the stated invariant once Phase 8 actually closes this gap.
         mutable std::uint16_t       m_BitID;                // Which bit was allocated for this type at run time
         const std::uint16_t         m_Size;                 // Size of the component in bytes
         const type::id              m_TypeID;               // Simple enumeration that tells what type of component is this

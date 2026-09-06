@@ -187,8 +187,14 @@ namespace xecs::game_mgr
         bool                                Foreach                 ( const std::vector<const xecs::archetype::instance*>&   List
                                                                     , T_FUNCTION&&                                           Function 
                                                                     ) noexcept;
+        // XECS_API: Run/Stop are ordinary (non-template) member functions defined out-of-line in
+        // xecs_game_mgr.cpp - unlike everything else in this class, which is a template and gets
+        // compiled fresh into whichever module calls it, these two need dllexport/dllimport once
+        // xECSV2 is a shared library, or a consuming module simply can't find their definitions.
+        XECS_API
         void                                Run                     ( void
                                                                     ) noexcept;
+        XECS_API
         void                                Stop                    ( void
                                                                     ) noexcept;
         // Forwards to xecs::component::mgr::UnregisterPlugin - see that method's own comment for
@@ -212,6 +218,8 @@ namespace xecs::game_mgr
         // dependencies/xECSV2/smoke_test.cpp's own save+load round trip) - distinct from the
         // resource-pipeline-integrated Scene/Level/Prefab persistence (xecs_scene_inline.h/
         // xecs_prefab_mgr_inline.h) that E29 and friends actually use for editor content.
+        // XECS_API: same reasoning as Run/Stop above - an ordinary out-of-line member function.
+        XECS_API
         xerr                                SerializeGameState      ( const char* pFileName
                                                                     , bool        isRead
                                                                     , bool        isBinary = false

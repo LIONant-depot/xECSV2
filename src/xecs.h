@@ -147,13 +147,6 @@ struct std::hash<xresource::guid<T>>
 // INLINE FILES
 //--------------------------------------------------------------
 #include "details/xecs_component_type_inline.h"
-// Needs CreateInfo<T_COMPONENT>() (defined just above, in xecs_component_type_inline.h) to already
-// be a complete, callable consteval function - explicitly instantiating info_var<T> is what forces
-// CreateInfo<T>() to actually evaluate, unlike an ordinary implicit instantiation, which happens
-// lazily wherever info_v<T> is first used (by then everything is long since defined). Placed here,
-// right after that definition, rather than up in the FILES section with every other component type
-// header - only 10 built-in types need this at all (see the header's own comment for why).
-#include "xecs_builtin_instantiations.h"
 #include "details/xecs_component_entity_inline.h"
 #include "details/xecs_component_others_inline.h"
 #include "details/xecs_tools_inline.h"

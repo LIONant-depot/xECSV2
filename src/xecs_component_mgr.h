@@ -144,6 +144,9 @@ namespace xecs::component
         // The single component-type registry this binary owns - see its own comment (above,
         // namespace type { struct registry {...} }) for why this is an out-of-line static (one
         // definition, in details/xecs_component_mgr_inline.h) rather than another `inline static`.
-        static type::registry                               s_Registry;
+        // XECS_API: once xECSV2 is a shared library, every OTHER module that reads/writes this
+        // registry (RegisterComponent<T>() is a template, compiled fresh into whichever module
+        // calls it) needs to reach the SAME physical object xECSV2.dll owns, not a local copy.
+        static XECS_API type::registry                      s_Registry;
     };
 }
