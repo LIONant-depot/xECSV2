@@ -47,5 +47,9 @@ namespace xecs::prefab
             return *xproperty::getObjectByType<descriptor>();
         }
     };
-    inline static factory g_Factory{};
+    // See xecs_scene_descriptor.h's own GetFactory for why this is a class-static-member holder
+    // rather than a namespace-scope `inline static` (internal linkage, duplicates per TU) or a
+    // function-local static (would change eager registration to lazy).
+    namespace details { struct factory_holder { inline static factory s_Instance{}; }; }
+    inline factory& GetFactory() noexcept { return details::factory_holder::s_Instance; }
 }

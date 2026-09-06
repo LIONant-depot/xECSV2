@@ -57,5 +57,15 @@ namespace xecs::scene
             return *xproperty::getObjectByType<descriptor>();
         }
     };
-    inline static factory g_Factory{};
+    // NOT "inline static factory g_Factory{};" at namespace scope - `static` at namespace scope is
+    // internal linkage regardless of `inline`, so every translation unit that includes this header
+    // gets its own, separate factory object (confirmed happening today between xecs.cpp and E29's
+    // own .cpp in the same xGPU_unit_test.exe - harmless so far only because factory_base::s_pHead
+    // tolerates redundant, behaviorally-identical entries). Wrapping the instance in a details::
+    // holder struct makes it a genuine C++17 inline CLASS-static member instead - one, ODR-merged
+    // instance across every TU in the program, still constructed EAGERLY at static-init time (no
+    // lazy-accessor/explicit-bootstrap dance needed, unlike a function-local `static` would require -
+    // factory_base::Find(Guid) keeps working the moment anything calls it, exactly like today).
+    namespace details { struct factory_holder { inline static factory s_Instance{}; }; }
+    inline factory& GetFactory() noexcept { return details::factory_holder::s_Instance; }
 }
