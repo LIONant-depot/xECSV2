@@ -186,10 +186,10 @@ namespace xecs::archetype
     ) noexcept
     {
         xecs::tools::bits BitsNoFlags;
-        for( int i=0; i< BitsNoFlags.m_Bits.size(); ++i ) BitsNoFlags.m_Bits[i] = AllComponentsBits.m_Bits[i] & (~xecs::component::mgr::s_TagsBits.m_Bits[i]);
+        for( int i=0; i< BitsNoFlags.m_Bits.size(); ++i ) BitsNoFlags.m_Bits[i] = AllComponentsBits.m_Bits[i] & (~xecs::component::mgr::s_Registry.m_TagsBits.m_Bits[i]);
         int nInfos = BitsNoFlags.ToInfoArray(m_InfoArray);
 
-        BitsNoFlags.setupAnd(BitsNoFlags, xecs::component::mgr::s_ShareBits);
+        BitsNoFlags.setupAnd(BitsNoFlags, xecs::component::mgr::s_Registry.m_ShareBits);
         m_nShareComponents = BitsNoFlags.CountComponents();
          
         //
@@ -224,7 +224,7 @@ namespace xecs::archetype
 
         // Setup the last few bits
         m_ComponentBits   = AllComponentsBits;
-        m_ExclusiveTagsBits.setupAnd( AllComponentsBits, xecs::component::mgr::s_ExclusiveTagsBits );
+        m_ExclusiveTagsBits.setupAnd( AllComponentsBits, xecs::component::mgr::s_Registry.m_ExclusiveTagsBits );
         m_nDataComponents = xecs::types::static_cast_safe<std::uint8_t>(nInfos) - m_nShareComponents;
         m_Guid            = Guid;
 
@@ -1083,14 +1083,14 @@ instance::_MoveInEntity
 
         xecs::tools::bits ShareOverlappingComponentsBits;
         for( int i=0; i< ShareOverlappingComponentsBits.m_Bits.size(); ++i ) 
-            ShareOverlappingComponentsBits.m_Bits[i] = (m_ComponentBits.m_Bits[i] & FromArchetype.m_ComponentBits.m_Bits[i]) & xecs::component::mgr::s_ShareBits.m_Bits[i];
+            ShareOverlappingComponentsBits.m_Bits[i] = (m_ComponentBits.m_Bits[i] & FromArchetype.m_ComponentBits.m_Bits[i]) & xecs::component::mgr::s_Registry.m_ShareBits.m_Bits[i];
 
         xecs::component::entity::info_array InfoArray;
         int nMovableShares = ShareOverlappingComponentsBits.ToInfoArray(InfoArray);
 
         std::array< std::byte*, xecs::settings::max_share_components_per_entity_v > MovablePointerArray;
         xecs::tools::bits FromFamilyShareOnlyBits;
-        FromFamilyShareOnlyBits.setupAnd(FromArchetype.m_ComponentBits, xecs::component::mgr::s_ShareBits);
+        FromFamilyShareOnlyBits.setupAnd(FromArchetype.m_ComponentBits, xecs::component::mgr::s_Registry.m_ShareBits);
         for( int i=0; i< nMovableShares; ++i ) 
         {
             const auto& Info              = *InfoArray[i];

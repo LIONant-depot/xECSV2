@@ -52,7 +52,7 @@ namespace xecs::query
         if constexpr(mode_v == xecs::query::details::mode::DATA_AND_SHARES )
         {
             // Setup the share bits only
-            parent_t::m_ArchetypeShareBits.setupAnd( Archetype.getComponentBits(), xecs::component::mgr::s_ShareBits );
+            parent_t::m_ArchetypeShareBits.setupAnd( Archetype.getComponentBits(), xecs::component::mgr::s_Registry.m_ShareBits );
 
             // Cache a map that goes from the function share args to the family share
             [&]<typename...T_COMPONENTS>(std::tuple<T_COMPONENTS...>*) constexpr noexcept

@@ -44,6 +44,39 @@ namespace xecs::component
     };
 
     //
+    // The single registry of every component TYPE ever registered - what used to be scattered
+    // across nine separate `inline static` data members directly on `mgr` (m_ComponentInfoMap,
+    // s_ShareBits, s_DataBits, s_TagsBits, s_ExclusiveTagsBits, s_UniqueID, s_BitsToInfo, s_nTypes,
+    // s_isLocked). Bundled into one struct, given exactly one out-of-line definition
+    // (mgr::s_Registry, defined once in details/xecs_component_mgr_inline.h) so there is one,
+    // discoverable, physical owner - "inline static" at namespace OR class scope still only
+    // guarantees "one instance per linked binary/module," not "one instance," which is exactly the
+    // wrong mental model for what eventually needs to be the one shared authority once xECSV2 is
+    // split across a game-code DLL and a host (see the xECSV2 DLL-boundary audit for the empirical
+    // proof of why this matters). This is a pure storage-consolidation pass - the fields' MEANING
+    // and the code that mutates them (RegisterComponent/LockComponentTypes/etc., still declared on
+    // mgr below, same public signatures) are unchanged; only where they physically live changed.
+    //
+    namespace type
+    {
+        struct registry
+        {
+            using bits_to_info_array = std::array<const xecs::component::type::info*, xecs::settings::max_component_types_v>;
+            using component_info_map = std::unordered_map<xecs::component::type::guid, const xecs::component::type::info*>;
+
+            component_info_map    m_ComponentInfoMap  {};
+            xecs::tools::bits     m_ShareBits         {};
+            xecs::tools::bits     m_DataBits          {};
+            xecs::tools::bits     m_TagsBits          {};
+            xecs::tools::bits     m_ExclusiveTagsBits {};
+            int                   m_UniqueID          = 0;
+            bits_to_info_array    m_BitsToInfo        {};
+            int                   m_nTypes            = 0;
+            bool                  m_isLocked          = false;
+        };
+    }
+
+    //
     // MGR
     //
     struct mgr final
@@ -86,18 +119,11 @@ namespace xecs::component
         inline static
         void                                resetRegistrations      ( void 
                                                                     ) noexcept;
-        using bits_to_info_array = std::array<const xecs::component::type::info*, xecs::settings::max_component_types_v>;
-        using component_info_map = std::unordered_map<xecs::component::type::guid, const xecs::component::type::info*>;
-
         details::global_info_mgr                            m_GlobalEntityInfos {};
-        inline static component_info_map                    m_ComponentInfoMap  {};
-        inline static xecs::tools::bits                     s_ShareBits         {};
-        inline static xecs::tools::bits                     s_DataBits          {};
-        inline static xecs::tools::bits                     s_TagsBits          {};
-        inline static xecs::tools::bits                     s_ExclusiveTagsBits {};
-        inline static int                                   s_UniqueID          = 0;
-        inline static bits_to_info_array                    s_BitsToInfo        {};
-        inline static int                                   s_nTypes            = 0;
-        inline static bool                                  s_isLocked          = false;
+
+        // The single component-type registry this binary owns - see its own comment (above,
+        // namespace type { struct registry {...} }) for why this is an out-of-line static (one
+        // definition, in details/xecs_component_mgr_inline.h) rather than another `inline static`.
+        static type::registry                               s_Registry;
     };
 }

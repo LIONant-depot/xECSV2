@@ -216,7 +216,7 @@ namespace xecs::tools
                 {
                     const int c = std::countr_zero(V);
                     nBit += c;
-                    Function( nComponents++, *xecs::component::mgr::s_BitsToInfo[GlobalBit + nBit] );
+                    Function( nComponents++, *xecs::component::mgr::s_Registry.m_BitsToInfo[GlobalBit + nBit] );
                     V >>= (1 + c);
                     nBit++;
                 } while (V);

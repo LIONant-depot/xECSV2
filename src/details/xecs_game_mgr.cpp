@@ -9,6 +9,19 @@
 // transitively by xecs.h/xcore.h, so it needs its own include here where it's actually used.
 #include "../../../xproperty/source/sprop/property_sprop_xtextfile_serializer.h"
 
+namespace xecs::component
+{
+    // The one, physical definition of the component-type registry this binary owns (declared in
+    // xecs_component_mgr.h as `static type::registry s_Registry;`, deliberately NOT `inline static`
+    // - see that declaration's own comment). This file is the right home for it: xecs_game_mgr.cpp
+    // is `#include`d directly into xecs.cpp itself and is never compiled as its own standalone
+    // translation unit, so this is guaranteed to be the one and only definition per binary - unlike
+    // any of the `details/*_inline.h` headers, which get pulled into every separate .cpp that
+    // includes xecs.h (xecs.cpp, E29's own .cpp, smoke_test.cpp, ...) and would violate ODR if a
+    // plain out-of-line static definition were placed there instead.
+    xecs::component::type::registry mgr::s_Registry{};
+}
+
 namespace xecs::game_mgr
 {
     //---------------------------------------------------------------------------
@@ -217,7 +230,7 @@ namespace xecs::game_mgr
             if( false == isRead )
             {
                 auto&               Archetype   = m_ArchetypeMgr.m_lArchetype[iArchetype];
-                xecs::tools::bits   TagBits     = xecs::tools::bits{}.setupAnd(Archetype->m_ComponentBits, xecs::component::mgr::s_TagsBits);
+                xecs::tools::bits   TagBits     = xecs::tools::bits{}.setupAnd(Archetype->m_ComponentBits, xecs::component::mgr::s_Registry.m_TagsBits);
 
                 nDataTypes      = Archetype->m_nDataComponents;
                 nShareTypes     = Archetype->m_nShareComponents;

@@ -136,7 +136,14 @@ namespace xecs::component
     //------------------------------------------------------------------------------
     // COMPONENT MGR
     //------------------------------------------------------------------------------
-
+    // The one, physical definition of mgr::s_Registry lives in details/xecs_game_mgr.cpp, NOT here -
+    // this file is a `_inline.h` header, included by every separate translation unit that pulls in
+    // xecs.h (xecs.cpp, E29's own .cpp, smoke_test.cpp, ...), so a plain out-of-line static
+    // definition placed here would violate ODR (multiple definitions) the moment more than one such
+    // TU links into the same binary - exactly the "each TU gets its own copy" bug class this whole
+    // registry consolidation exists to eliminate, just reintroduced at the definition site instead
+    // of the declaration. xecs_game_mgr.cpp is the one file guaranteed to be compiled exactly once
+    // per binary (it's `#include`d directly into xecs.cpp itself, never compiled standalone).
     //------------------------------------------------------------------------------
 
     mgr::mgr(void) noexcept
@@ -158,7 +165,7 @@ namespace xecs::component
     requires (xecs::component::type::is_valid_v<T_COMPONENT>)
     void mgr::RegisterComponent(void) noexcept
     {
-        assert( s_isLocked == false );
+        assert( s_Registry.m_isLocked == false );
         if (component::type::info_v<T_COMPONENT>.m_BitID == type::info::invalid_bit_id_v)
         {
             if constexpr( component::type::info_v<T_COMPONENT>.m_TypeID == xecs::component::type::id::SHARE )
@@ -170,7 +177,7 @@ namespace xecs::component
             // Put there an invalid bitUD that indicates that we are waiting to be assign the right ID
             component::type::info_v<T_COMPONENT>.m_BitID = type::info::invalid_bit_id_v-1;
 
-            s_BitsToInfo[s_nTypes++] = &component::type::info_v<T_COMPONENT>;
+            s_Registry.m_BitsToInfo[s_Registry.m_nTypes++] = &component::type::info_v<T_COMPONENT>;
         }
     }
 
@@ -214,42 +221,42 @@ namespace xecs::component
     inline
     void mgr::LockComponentTypes( void ) noexcept
     {
-        if(s_isLocked) return;
-        s_isLocked = true;
+        if(s_Registry.m_isLocked) return;
+        s_Registry.m_isLocked = true;
 
         //
-        // Short the final list of component types infos 
+        // Short the final list of component types infos
         //
         std::sort
-        ( s_BitsToInfo.begin()
-        , s_BitsToInfo.begin() + s_nTypes
+        ( s_Registry.m_BitsToInfo.begin()
+        , s_Registry.m_BitsToInfo.begin() + s_Registry.m_nTypes
         , xecs::component::type::details::CompareTypeInfos
         );
 
         //
         // Officially register each of the components
         //
-        for( int i=0; i<s_nTypes; ++i )
+        for( int i=0; i<s_Registry.m_nTypes; ++i )
         {
             // Everyone should be waiting for us to assign their BitID
-            assert( s_BitsToInfo[i]->m_BitID == (type::info::invalid_bit_id_v - 1) );
+            assert( s_Registry.m_BitsToInfo[i]->m_BitID == (type::info::invalid_bit_id_v - 1) );
 
             // Ok we just officially assing their ID now in shorted order
-            s_BitsToInfo[i]->m_BitID = i;
+            s_Registry.m_BitsToInfo[i]->m_BitID = i;
 
             // Add to the info map
-            m_ComponentInfoMap.emplace( std::pair{ s_BitsToInfo[i]->m_Guid, s_BitsToInfo[i] } );
+            s_Registry.m_ComponentInfoMap.emplace( std::pair{ s_Registry.m_BitsToInfo[i]->m_Guid, s_Registry.m_BitsToInfo[i] } );
 
             // Now we are ready to assign the IDs...
-            switch( s_BitsToInfo[i]->m_TypeID )
+            switch( s_Registry.m_BitsToInfo[i]->m_TypeID )
             {
-                case xecs::component::type::id::DATA:           s_DataBits.setBit(s_BitsToInfo[i]->m_BitID);
+                case xecs::component::type::id::DATA:           s_Registry.m_DataBits.setBit(s_Registry.m_BitsToInfo[i]->m_BitID);
                                                                 break;
-                case xecs::component::type::id::TAG:            s_TagsBits.setBit(s_BitsToInfo[i]->m_BitID);
-                                                                if( s_BitsToInfo[i]->m_bExclusiveTag )
-                                                                    s_ExclusiveTagsBits.setBit(s_BitsToInfo[i]->m_BitID);
+                case xecs::component::type::id::TAG:            s_Registry.m_TagsBits.setBit(s_Registry.m_BitsToInfo[i]->m_BitID);
+                                                                if( s_Registry.m_BitsToInfo[i]->m_bExclusiveTag )
+                                                                    s_Registry.m_ExclusiveTagsBits.setBit(s_Registry.m_BitsToInfo[i]->m_BitID);
                                                                 break;
-                case xecs::component::type::id::SHARE:          s_ShareBits.setBit(s_BitsToInfo[i]->m_BitID);
+                case xecs::component::type::id::SHARE:          s_Registry.m_ShareBits.setBit(s_Registry.m_BitsToInfo[i]->m_BitID);
                                                                 break;
                 default: assert(false);
             }
@@ -260,29 +267,29 @@ namespace xecs::component
 
     const xecs::component::type::info* mgr::findComponentTypeInfo( xecs::component::type::guid Guid ) noexcept
     {
-        auto It = m_ComponentInfoMap.find(Guid);
-        if( It == m_ComponentInfoMap.end() ) return nullptr;
+        auto It = s_Registry.m_ComponentInfoMap.find(Guid);
+        if( It == s_Registry.m_ComponentInfoMap.end() ) return nullptr;
         return It->second;
     }
 
     //---------------------------------------------------------------------------
-    inline 
+    inline
     void mgr::resetRegistrations( void ) noexcept
     {
         // Reset all known components
-        for( int i=0; i< s_nTypes; ++i)
+        for( int i=0; i< s_Registry.m_nTypes; ++i)
         {
-            s_BitsToInfo[i]->m_BitID = xecs::component::type::info::invalid_bit_id_v;
+            s_Registry.m_BitsToInfo[i]->m_BitID = xecs::component::type::info::invalid_bit_id_v;
         }
 
-        s_ShareBits         = xecs::tools::bits{};
-        s_DataBits          = xecs::tools::bits{};
-        s_TagsBits          = xecs::tools::bits{};
-        s_ExclusiveTagsBits = xecs::tools::bits{};
+        s_Registry.m_ShareBits         = xecs::tools::bits{};
+        s_Registry.m_DataBits          = xecs::tools::bits{};
+        s_Registry.m_TagsBits          = xecs::tools::bits{};
+        s_Registry.m_ExclusiveTagsBits = xecs::tools::bits{};
 
-        s_UniqueID          = 0;
-        s_BitsToInfo        = bits_to_info_array{};
-        s_nTypes            = 0;
-        s_isLocked          = false;
+        s_Registry.m_UniqueID          = 0;
+        s_Registry.m_BitsToInfo        = type::registry::bits_to_info_array{};
+        s_Registry.m_nTypes            = 0;
+        s_Registry.m_isLocked          = false;
     }
 }

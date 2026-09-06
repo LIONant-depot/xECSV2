@@ -51,7 +51,7 @@ namespace xecs::archetype
                                                         ) const noexcept { return m_nDataComponents; }
         __inline
         int                     getTagComponentCount    ( void
-                                                        ) const noexcept { return xecs::tools::bits{}.setupAnd(m_ComponentBits, xecs::component::mgr::s_TagsBits).CountComponents(); }
+                                                        ) const noexcept { return xecs::tools::bits{}.setupAnd(m_ComponentBits, xecs::component::mgr::s_Registry.m_TagsBits).CountComponents(); }
         constexpr __inline
         guid                     getGuid                ( void 
                                                         ) const noexcept;
