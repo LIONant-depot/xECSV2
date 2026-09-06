@@ -1,3 +1,5 @@
+#include <filesystem>
+
 namespace xecs::system
 {
     //-------------------------------------------------------------------------------------------
@@ -178,5 +180,167 @@ namespace xecs::system
                 E.first->m_NotifierRegistration( Archetype, Entry );
             }
         }
+    }
+
+    //---------------------------------------------------------------------------
+    // m_UpdaterSystems and m_Events.m_OnUpdate.m_Delegates are always the exact same size, grown 1:1
+    // by RegisterSystem for every Update system (confirmed: only Update systems ever push to
+    // m_OnUpdate, in the same call, same order) - every method below relies on that index alignment
+    // instead of a separate order-index table.
+    //---------------------------------------------------------------------------
+
+    std::vector<update_system_row> mgr::GetUpdateSystemRows( void ) const noexcept
+    {
+        std::vector<update_system_row> Rows;
+        Rows.reserve(m_UpdaterSystems.size());
+        for( std::size_t i = 0; i < m_UpdaterSystems.size(); ++i )
+        {
+            Rows.push_back(update_system_row
+            { .m_Guid     = m_UpdaterSystems[i].first->m_Guid
+            , .m_pName    = m_UpdaterSystems[i].first->m_pName
+            , .m_bEnabled = m_Events.m_OnUpdate.m_Delegates[i].m_bEnabled
+            });
+        }
+        return Rows;
+    }
+
+    //---------------------------------------------------------------------------
+
+    void mgr::MoveUpdateSystem( type::guid Guid, int Delta ) noexcept
+    {
+        const int Step = (Delta > 0) - (Delta < 0); // -1, 0, or +1 - only an adjacent-neighbor swap is ever needed (one up/down click at a time)
+        if( Step == 0 ) return;
+
+        int i = -1;
+        for( int k = 0; k < static_cast<int>(m_UpdaterSystems.size()); ++k )
+            if( m_UpdaterSystems[k].first->m_Guid == Guid ) { i = k; break; }
+        if( i < 0 ) return;
+
+        const int j = i + Step;
+        if( j < 0 || j >= static_cast<int>(m_UpdaterSystems.size()) ) return; // clamped at the ends
+
+        std::swap( m_UpdaterSystems[i],                m_UpdaterSystems[j] );
+        std::swap( m_Events.m_OnUpdate.m_Delegates[i], m_Events.m_OnUpdate.m_Delegates[j] );
+    }
+
+    //---------------------------------------------------------------------------
+
+    void mgr::SetUpdateSystemEnabled( type::guid Guid, bool bEnabled ) noexcept
+    {
+        for( std::size_t i = 0; i < m_UpdaterSystems.size(); ++i )
+        {
+            if( m_UpdaterSystems[i].first->m_Guid == Guid )
+            {
+                m_Events.m_OnUpdate.m_Delegates[i].m_bEnabled = bEnabled;
+                return;
+            }
+        }
+    }
+
+    //---------------------------------------------------------------------------
+
+    void mgr::SnapshotForPlay( void ) noexcept
+    {
+        m_PreRunSnapshot = GetUpdateSystemRows();
+    }
+
+    //---------------------------------------------------------------------------
+    // Reorders/re-enables m_UpdaterSystems + its delegates back to exactly what they were the moment
+    // SnapshotForPlay() was called - discards whatever the user toggled while "playing" (the entire
+    // transient-vs-authored distinction lives here: while stopped, m_PreRunSnapshot is empty and every
+    // Move/SetEnabled call directly IS the authored state, nothing else to revert).
+    void mgr::RestoreFromSnapshot( void ) noexcept
+    {
+        if( m_PreRunSnapshot.empty() ) return;
+
+        for( std::size_t i = 0; i < m_PreRunSnapshot.size() && i < m_UpdaterSystems.size(); ++i )
+        {
+            const auto Guid = m_PreRunSnapshot[i].m_Guid;
+            if( m_UpdaterSystems[i].first->m_Guid != Guid )
+            {
+                for( std::size_t k = i + 1; k < m_UpdaterSystems.size(); ++k )
+                {
+                    if( m_UpdaterSystems[k].first->m_Guid == Guid )
+                    {
+                        std::swap( m_UpdaterSystems[i],                m_UpdaterSystems[k] );
+                        std::swap( m_Events.m_OnUpdate.m_Delegates[i], m_Events.m_OnUpdate.m_Delegates[k] );
+                        break;
+                    }
+                }
+            }
+            m_Events.m_OnUpdate.m_Delegates[i].m_bEnabled = m_PreRunSnapshot[i].m_bEnabled;
+        }
+
+        m_PreRunSnapshot.clear();
+    }
+
+    //---------------------------------------------------------------------------
+    // {m_ProjectPath}\Project.config\SystemOrder.config.txt - same fixed, non-asset settings-file
+    // convention e10::library_mgr already uses for its own Library.config.txt (plain xtextfile +
+    // xproperty::sprop::serializer::Stream against an ordinary XPROPERTY_DEF'd struct).
+    xerr mgr::Save( void ) const noexcept
+    {
+        system_order_config Config;
+        Config.m_UpdateOrder.reserve(m_UpdaterSystems.size());
+        for( std::size_t i = 0; i < m_UpdaterSystems.size(); ++i )
+        {
+            Config.m_UpdateOrder.push_back(system_order_entry
+            { .m_Guid     = m_UpdaterSystems[i].first->m_Guid.m_Value
+            , .m_Name     = m_UpdaterSystems[i].first->m_pName
+            , .m_bEnabled = m_Events.m_OnUpdate.m_Delegates[i].m_bEnabled
+            });
+        }
+
+        const auto ConfigFolder = std::format(L"{}\\Project.config", m_ProjectPath);
+        if( false == std::filesystem::exists(ConfigFolder) )
+            std::filesystem::create_directories(ConfigFolder);
+
+        xtextfile::stream Stream;
+        if( auto Err = Stream.Open(false, std::format(L"{}\\SystemOrder.config.txt", ConfigFolder), { xtextfile::file_type::TEXT }); Err )
+            return Err;
+
+        xproperty::settings::context Context;
+        return xproperty::sprop::serializer::Stream( Stream, Config, Context );
+    }
+
+    //---------------------------------------------------------------------------
+    // Meant to be called once at startup, AFTER RegisterSystems<...>() has populated
+    // m_UpdaterSystems - a missing file (no prior save yet) is NOT an error, registration order
+    // simply stands as-is.
+    xerr mgr::Load( void ) noexcept
+    {
+        xtextfile::stream Stream;
+        if( auto Err = Stream.Open(true, std::format(L"{}\\Project.config\\SystemOrder.config.txt", m_ProjectPath), { xtextfile::file_type::TEXT }); Err )
+            return {};
+
+        system_order_config Config;
+        xproperty::settings::context Context;
+        if( auto Err = xproperty::sprop::serializer::Stream( Stream, Config, Context ); Err )
+            return Err;
+
+        // Apply the saved order front-to-back, then its enabled state - a saved guid with no
+        // currently-registered match is silently skipped (system removed from code since last save);
+        // anything currently registered but never mentioned in the file just keeps its current
+        // (registration-order tail) position, left enabled.
+        int TargetIndex = 0;
+        for( auto& Entry : Config.m_UpdateOrder )
+        {
+            const type::guid Guid{ Entry.m_Guid };
+
+            int CurrentIndex = -1;
+            for( int k = TargetIndex; k < static_cast<int>(m_UpdaterSystems.size()); ++k )
+                if( m_UpdaterSystems[k].first->m_Guid == Guid ) { CurrentIndex = k; break; }
+            if( CurrentIndex < 0 ) continue;
+
+            if( CurrentIndex != TargetIndex )
+            {
+                std::swap( m_UpdaterSystems[TargetIndex],                m_UpdaterSystems[CurrentIndex] );
+                std::swap( m_Events.m_OnUpdate.m_Delegates[TargetIndex], m_Events.m_OnUpdate.m_Delegates[CurrentIndex] );
+            }
+            m_Events.m_OnUpdate.m_Delegates[TargetIndex].m_bEnabled = Entry.m_bEnabled;
+            ++TargetIndex;
+        }
+
+        return {};
     }
 }

@@ -50,7 +50,7 @@ namespace xecs::event
     {
         for (auto& E : m_Delegates)
         {
-            E.m_pCallback(E.m_pClass, std::forward<T_ARGS>(Args)...);
+            if (E.m_bEnabled) E.m_pCallback(E.m_pClass, std::forward<T_ARGS>(Args)...);
         }
     }
 }

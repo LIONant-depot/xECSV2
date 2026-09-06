@@ -53,6 +53,13 @@ namespace xecs::event
             callback*       m_pCallback;
             void*           m_pClass;
             const char*     m_pName;
+            // Skips this one delegate in NotifyAll without removing it - RemoveDelegate is declared
+            // below but has no implementation anywhere, so a genuine "system order/enable" feature
+            // (see xecs::system::mgr::SetUpdateSystemEnabled) needs a way to disable a delegate that
+            // doesn't depend on it. Defaults true so every OTHER existing use of this template (there
+            // are several across the engine, all assuming "every registered delegate always fires")
+            // is completely unaffected.
+            bool            m_bEnabled  = true;
         };
 
                             instance                ( const instance&

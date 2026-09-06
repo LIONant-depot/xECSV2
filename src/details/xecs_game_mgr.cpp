@@ -19,6 +19,10 @@ namespace xecs::game_mgr
         {
             m_isRunning = true;
             m_ArchetypeMgr.UpdateStructuralChanges();
+            // Captures the currently-authored Update-system order/enabled state so any toggle made
+            // through the "System Registry" UI WHILE this run is live stays purely transient - Stop()
+            // below discards it, reverting to exactly this snapshot.
+            m_SystemMgr.SnapshotForPlay();
             m_SystemMgr.m_Events.m_OnGameStart.NotifyAll();
         }
 
@@ -41,6 +45,7 @@ namespace xecs::game_mgr
         {
             m_isRunning = false;
             m_SystemMgr.m_Events.m_OnGameEnd.NotifyAll();
+            m_SystemMgr.RestoreFromSnapshot();
         }
     }
 
