@@ -4,7 +4,13 @@ namespace xecs::tools
     constexpr
     void bits::setBit(int Bit) noexcept
     {
-        xassert(Bit >= 0 && Bit <= 63);
+        // NOT "<= 63" - m_Bits already spans ceil(max_component_types_v/64) words (see its own
+        // declaration), and the x/y split below already correctly addresses any word - the old bound
+        // just never got updated past the days when this only held a single 64-bit word, so it fired
+        // a false assert (debug builds only - the release-mode math was always correct) the moment a
+        // component's runtime-assigned BitID reached 64+, which max_component_types_v=128 explicitly
+        // allows for.
+        xassert(Bit >= 0 && Bit < xecs::settings::max_component_types_v);
         int x = Bit / 64;
         int y = Bit % 64;
         m_Bits[x] |= (1ull << y);
@@ -14,7 +20,7 @@ namespace xecs::tools
     constexpr
     void bits::clearBit(int Bit) noexcept
     {
-        xassert(Bit>=0 && Bit <= 63);
+        xassert(Bit>=0 && Bit < xecs::settings::max_component_types_v);
         int x = Bit / 64;
         int y = Bit % 64;
         m_Bits[x] &= ~(1ull << y);
@@ -24,7 +30,7 @@ namespace xecs::tools
     constexpr
     bool bits::getBit(int Bit) const noexcept
     {
-        xassert(Bit >= 0 && Bit <= 63);
+        xassert(Bit >= 0 && Bit < xecs::settings::max_component_types_v);
         int x = Bit / 64;
         int y = Bit % 64;
         return m_Bits[x] & (1ull << y);
@@ -88,7 +94,7 @@ namespace xecs::tools
     constexpr
     void bits::ClearFromComponents( void ) noexcept
     {
-        ((ckearBit(xecs::component::type::info_v<T_COMPONENTS>.m_BitID)), ...);
+        ((clearBit(xecs::component::type::info_v<T_COMPONENTS>.m_BitID)), ...);
     }
 
     //------------------------------------------------------------------------------------
@@ -98,7 +104,7 @@ namespace xecs::tools
     constexpr
     void bits::ClearFromComponents( std::tuple<T_COMPONENTS...>* ) noexcept
     {
-        ((ckearBit(xecs::component::type::info_v<T_COMPONENTS>.m_BitID)), ...);
+        ((clearBit(xecs::component::type::info_v<T_COMPONENTS>.m_BitID)), ...);
     }
 
     //------------------------------------------------------------------------------------

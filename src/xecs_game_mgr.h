@@ -153,13 +153,6 @@ namespace xecs::game_mgr
                                             CreatePrefabVariant     ( xecs::prefab::guid        PrefabGuid
                                                                     , T_FUNCTION&&              Function = xecs::tools::empty_lambda{}
                                                                     ) noexcept;
-        inline
-        void                                EditorSetEntityComponentProperty
-                                                                    ( xecs::component::entity       Entity
-                                                                    , xecs::component::type::guid   TypeGuid
-                                                                    , xproperty::sprop::container::prop PropertyData
-                                                                    , bool                          isOverride = true
-                                                                    ) noexcept;
         template
         <   typename T_FUNCTION
         ,   auto     T_SHARE_AS_DATA_V = false
@@ -196,15 +189,11 @@ namespace xecs::game_mgr
         > __inline
         T_SYSTEM&                           getSystem               ( void
                                                                     ) noexcept;
+        // The live, actively-tested persistence path for a raw ECS game state (used by
+        // dependencies/xECSV2/smoke_test.cpp's own save+load round trip) - distinct from the
+        // resource-pipeline-integrated Scene/Level/Prefab persistence (xecs_scene_inline.h/
+        // xecs_prefab_mgr_inline.h) that E29 and friends actually use for editor content.
         xerr                                SerializeGameState      ( const char* pFileName
-                                                                    , bool        isRead
-                                                                    , bool        isBinary = false
-                                                                    ) noexcept;
-        xerr                                SerializePrefabs        ( const char*   pFolderName
-                                                                    , bool          isRead
-                                                                    , bool          isBinary = false
-                                                                    ) noexcept;
-        xerr                                SerializeGameStateV2    ( const char* pFileName
                                                                     , bool        isRead
                                                                     , bool        isBinary = false
                                                                     ) noexcept;
