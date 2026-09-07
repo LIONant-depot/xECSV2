@@ -260,8 +260,13 @@ namespace xecs::component
             // Ok we just officially assing their ID now in shorted order
             s_Registry.m_BitsToInfo[i]->m_BitID = i;
 
-            // Add to the info map
-            s_Registry.m_ComponentInfoMap.emplace( std::pair{ s_Registry.m_BitsToInfo[i]->m_Guid, s_Registry.m_BitsToInfo[i] } );
+            // Add to the info map - insert_or_assign, not emplace: a GUID is a compile-time
+            // constant, identical across every reload generation, so emplace's own "no-op if the
+            // key already exists" behavior would silently keep a STALE pointer from a previous
+            // generation around if resetRegistrations() were ever incomplete again (exactly the bug
+            // this map's own missing .clear() caused - see resetRegistrations' own comment). This is
+            // the belt to that fix's suspenders, not a substitute for it.
+            s_Registry.m_ComponentInfoMap.insert_or_assign( s_Registry.m_BitsToInfo[i]->m_Guid, s_Registry.m_BitsToInfo[i] );
 
             // Now we are ready to assign the IDs...
             switch( s_Registry.m_BitsToInfo[i]->m_TypeID )
@@ -308,6 +313,16 @@ namespace xecs::component
         s_Registry.m_Owner             = type::registry::bits_to_owner_array{};
         s_Registry.m_nTypes            = 0;
         s_Registry.m_isLocked          = false;
+
+        // Was missing - left every GUID->info* entry for a plugin-owned type (e.g. a Game.dll
+        // component) pointing at that generation's own info_v<T>, which lives inside the plugin
+        // module about to be FreeLibrary'd. LockComponentTypes' own m_ComponentInfoMap.emplace(...)
+        // is a no-op for a GUID already present (a compile-time constant, identical across every
+        // reload generation) - so without this clear, the NEXT generation's registration silently
+        // never overwrote the stale entry, and every later GUID lookup/iteration (findComponentTypeInfo,
+        // or any UI walking the whole map, e.g. the "Add Component" list) read freed memory. Confirmed
+        // live: a bad pInfo pointer after a few Game.dll reload cycles.
+        s_Registry.m_ComponentInfoMap.clear();
     }
 
     //---------------------------------------------------------------------------
