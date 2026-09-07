@@ -60,6 +60,19 @@ namespace xecs::scene
         // Save does not scale with entity count). Kept as a repair/recovery tool only (e.g. "list
         // every entity file that exists but isn't in m_ActiveEntities" for a future orphan-sweep/GC
         // pass, to catch drift from a crash before a save, manual file surgery, etc).
+        //
+        // FUTURE WORK (documented, not implemented - deliberately deferred, direct user request
+        // 2026-09-07): a cheap, load-time consistency check between this scan and
+        // descriptor::m_ActiveEntities, splitting disagreement into two severities:
+        //   - file exists, GUID not in m_ActiveEntities -> orphaned file (e.g. an interrupted save -
+        //     see SaveScene's own comment for exactly how that can happen today - or manual file
+        //     surgery). Low severity: flag it, offer cleanup, don't block load.
+        //   - GUID in m_ActiveEntities, file missing -> dangling reference: an existence claim with
+        //     no data behind it. High severity: warn/block on load rather than silently treating a
+        //     scene member as absent.
+        // O(n) set comparison (this function's own result vs descriptor::m_ActiveEntities), cheap
+        // enough to run on every load. Would also be the natural detector for the gap SaveScene's own
+        // comment below describes, rather than needing the save itself to be perfectly atomic.
         //-----------------------------------------------------------------------------------------
         inline std::vector<permanent_id> DiscoverEntityIds( mgr& Mgr, guid SceneGuid ) noexcept
         {
@@ -447,6 +460,20 @@ namespace xecs::scene
         }
         pScene->m_PendingChanges.clear();
 
+        // FUTURE WORK (documented, not implemented - deliberately deferred, direct user request
+        // 2026-09-07): this save is NOT atomic as a whole. The loop above performs each entity's own
+        // file delete/write one at a time, and only AFTER it fully completes does the line below
+        // rewrite the descriptor (the thing that records which GUIDs are actually active). A crash
+        // (power loss, force-kill) between an entity's file being deleted and this descriptor rewrite
+        // leaves the OLD descriptor still listing that GUID as active with no file behind it - exactly
+        // the "dangling reference" case DiscoverEntityIds' own comment above describes, and reachable
+        // in practice, not just theoretical. Two independent ways to close this, either sufficient on
+        // its own: (a) the load-time consistency check documented on DiscoverEntityIds, which would
+        // catch and surface this after the fact; (b) writing this descriptor to a temp file and
+        // renaming it over the real one (atomic on the same volume) - doesn't make the WHOLE save
+        // atomic (individual entity writes still aren't transactional with each other), but does
+        // guarantee the descriptor itself never reflects a half-applied state.
+        //
         // Writes the descriptor, including a freshly-recomputed m_ActiveEntities - see its own comment.
         return SaveSceneDescriptor(SceneGuid);
     }
