@@ -219,7 +219,7 @@ namespace xecs::prefab
 
         xassert( InstanceBits.getBit(xecs::component::type::info_v<xecs::prefab::tag>.m_BitID) );
 
-        if( false == isVariant ) 
+        if( false == isVariant )
         {
             InstanceBits.clearBit( xecs::component::type::info_v<xecs::prefab::tag>.m_BitID );
             InstanceBits.clearBit( xecs::component::type::info_v<xecs::prefab::root>.m_BitID );
@@ -277,7 +277,7 @@ namespace xecs::prefab
             {
                 assert( std::tuple_size_v<xecs::component::type::details::share_only_tuple_t<typename fn_traits::args_tuple>> == 0 );
                 if constexpr (std::is_same_v< T_CALLBACK, xecs::tools::empty_lambda > || std::tuple_size_v<xecs::component::type::details::share_only_tuple_t<typename fn_traits::args_tuple>> == 0) InstanceEntity = InstanceArchetype.CreateEntities( Count, Entity, std::forward<T_CALLBACK&&>(Callback) );
-                else 
+                else
                 {
                     xassert( false && "You are trying to chage a share component using a function but the entity has not share components" );
                 }

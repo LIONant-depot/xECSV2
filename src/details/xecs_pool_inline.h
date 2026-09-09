@@ -616,6 +616,13 @@ namespace xecs::pool
         int         iPoolTo       = 1;
         const int   PoolFromCount = static_cast<int>(FromPool.m_ComponentInfos.size());
         const int   PoolToCount   = static_cast<int>(m_ComponentInfos.size());
+
+        // Either pool may hold nothing but the mandatory entity component (index 0) - e.g. a
+        // bare entity turned into a "regular" (childless) prefab instance archetype - in which
+        // case there is nothing to copy and the loop below must never dereference index 1.
+        if (iPoolFrom >= PoolFromCount || iPoolTo >= PoolToCount)
+            return;
+
         while (true)
         {
             if (FromPool.m_ComponentInfos[iPoolFrom] == m_ComponentInfos[iPoolTo])
