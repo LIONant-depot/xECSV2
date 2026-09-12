@@ -342,9 +342,13 @@ namespace xecs::pool
     ) const noexcept
     {
         const auto Backup = Sequence;
+        // Pointer equality is the fast same-module path. Across DLL boundaries the same T has
+        // distinct info_v<T> addresses (host vs xECSV2.dll), so also match m_Guid - CompareTypeInfos
+        // alone cannot return a hit (it only does sorted early-out).
         for( const auto end = static_cast<const int>(m_ComponentInfos.size()); Sequence < end; ++Sequence)
         {
             if (&SearchInfo == m_ComponentInfos[Sequence]) return Sequence++;
+            if (SearchInfo.m_Guid == m_ComponentInfos[Sequence]->m_Guid) return Sequence++;
             [[unlikely]] if ( xecs::component::type::details::CompareTypeInfos(&SearchInfo, m_ComponentInfos[Sequence])) break;
         }
         Sequence = Backup;
@@ -355,9 +359,11 @@ namespace xecs::pool
     constexpr
     int instance::findIndexComponentFromInfo( const xecs::component::type::info& SearchInfo ) const noexcept
     {
+        // See findIndexComponentFromInfoInSequence - GUID match required across module boundaries.
         for( int i=0, end = static_cast<int>(m_ComponentInfos.size()); i<end; ++i )
         {
             if( &SearchInfo == m_ComponentInfos[i] ) return i;
+            if( SearchInfo.m_Guid == m_ComponentInfos[i]->m_Guid ) return i;
             [[unlikely]] if(xecs::component::type::details::CompareTypeInfos(&SearchInfo, m_ComponentInfos[i] )) return -1;
         }
         return -1;

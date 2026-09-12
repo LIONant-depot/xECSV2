@@ -106,7 +106,14 @@ namespace xecs::game_mgr
     {
         xecs::tools::bits Bits{};
         for( auto& e : Types )
-            Bits.setBit( e->m_BitID );
+        {
+            // Same DLL-boundary rule as AddFromComponents: the span may hold a foreign module's
+            // info_v* whose m_BitID was never writeback'd - GUID -> registry info* is authoritative.
+            if (auto* pReg = m_ComponentMgr.findComponentTypeInfo(e->m_Guid))
+                Bits.setBit(pReg->m_BitID);
+            else
+                Bits.setBit(e->m_BitID);
+        }
 
         // Make sure we always include the entity - resolved by GUID through the registry, NOT
         // xecs::component::type::info_v<xecs::component::entity>.m_BitID directly: this function is

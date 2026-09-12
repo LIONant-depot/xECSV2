@@ -30,28 +30,28 @@ namespace xecs::tools
         < typename... T_COMPONENTS
         > requires
         ( assert_valid_tuple_components_v< std::tuple<T_COMPONENTS...> >
-        ) constexpr __inline
+        ) __inline
         void                    AddFromComponents       ( void 
                                                         ) noexcept;
         template
         < typename... T_COMPONENTS
         > requires
         ( assert_valid_tuple_components_v<std::tuple<T_COMPONENTS...>>
-        ) constexpr __inline
+        ) __inline
         void                    AddFromComponents       ( std::tuple<T_COMPONENTS...>*
                                                         ) noexcept;
         template
         < typename... T_COMPONENTS
         > requires
         ( assert_valid_tuple_components_v< std::tuple<T_COMPONENTS...> >
-        ) constexpr __inline
+        ) __inline
         void                    ClearFromComponents     ( void 
                                                         ) noexcept;
         template
         < typename... T_COMPONENTS
         > requires
         ( assert_valid_tuple_components_v< std::tuple<T_COMPONENTS...> >
-        ) constexpr __inline
+        ) __inline
         void                    ClearFromComponents     ( std::tuple<T_COMPONENTS...>*
                                                         ) noexcept;
         inline
@@ -74,21 +74,12 @@ namespace xecs::tools
     };
 
     //-------------------------------------------------------------------------------------------------
-    constexpr
-    bool HaveAllComponents(const bits& Bits, std::span<const xecs::component::type::info* const > Span ) noexcept
-    {
-        for( auto& e : Span )
-        {
-            if( Bits.getBit( e->m_BitID ) == false ) return false;
-        }
-        return true;
-    }
+    // Body in details/xecs_tools_bits_inline.h (needs component::mgr::findComponentTypeInfo).
+    inline
+    bool HaveAllComponents(const bits& Bits, std::span<const xecs::component::type::info* const > Span ) noexcept;
 
     //-------------------------------------------------------------------------------------------------
     template< typename... T_COMPONENTS >
-    constexpr
-    bool HaveAllComponents( const bits& Bits, std::tuple<T_COMPONENTS...>* ) noexcept
-    {
-        return ((Bits.getBit(xecs::component::type::info_v<T_COMPONENTS>.m_BitID ) && ... ));
-    }
+    inline
+    bool HaveAllComponents( const bits& Bits, std::tuple<T_COMPONENTS...>* ) noexcept;
 }

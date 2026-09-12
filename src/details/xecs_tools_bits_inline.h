@@ -72,39 +72,38 @@ namespace xecs::tools
     //------------------------------------------------------------------------------------
     template< typename... T_COMPONENTS >
     requires( assert_valid_tuple_components_v < std::tuple<T_COMPONENTS...> > )
-    constexpr
     void bits::AddFromComponents( void ) noexcept
     {
-        ((setBit(xecs::component::type::info_v<T_COMPONENTS>.m_BitID)), ...);
+        // Resolve BitID through the shared registry (mgr::s_Registry). Direct info_v<T>.m_BitID is
+        // only valid in the module that RegisterComponent'd T; XECS_API callers (SerializeGameState
+        // in xECSV2.dll) see a separate, still-invalid info_v copy for host-registered types.
+        ((setBit(xecs::component::mgr::findComponentTypeInfo(xecs::component::type::info_v<T_COMPONENTS>.m_Guid)->m_BitID)), ...);
     }
 
     //------------------------------------------------------------------------------------
     template< typename... T_COMPONENTS >
     requires( assert_valid_tuple_components_v < std::tuple<T_COMPONENTS...> > )
-    constexpr
     void bits::AddFromComponents( std::tuple<T_COMPONENTS...>* ) noexcept
     {
-        ((setBit(xecs::component::type::info_v<T_COMPONENTS>.m_BitID)), ...);
+        ((setBit(xecs::component::mgr::findComponentTypeInfo(xecs::component::type::info_v<T_COMPONENTS>.m_Guid)->m_BitID)), ...);
     }
 
     //------------------------------------------------------------------------------------
 
     template< typename... T_COMPONENTS >
     requires( assert_valid_tuple_components_v < std::tuple<T_COMPONENTS...> > )
-    constexpr
     void bits::ClearFromComponents( void ) noexcept
     {
-        ((clearBit(xecs::component::type::info_v<T_COMPONENTS>.m_BitID)), ...);
+        ((clearBit(xecs::component::mgr::findComponentTypeInfo(xecs::component::type::info_v<T_COMPONENTS>.m_Guid)->m_BitID)), ...);
     }
 
     //------------------------------------------------------------------------------------
 
     template< typename... T_COMPONENTS >
     requires( assert_valid_tuple_components_v < std::tuple<T_COMPONENTS...> > )
-    constexpr
     void bits::ClearFromComponents( std::tuple<T_COMPONENTS...>* ) noexcept
     {
-        ((clearBit(xecs::component::type::info_v<T_COMPONENTS>.m_BitID)), ...);
+        ((clearBit(xecs::component::mgr::findComponentTypeInfo(xecs::component::type::info_v<T_COMPONENTS>.m_Guid)->m_BitID)), ...);
     }
 
     //------------------------------------------------------------------------------------
@@ -227,4 +226,28 @@ namespace xecs::tools
 
         return nComponents;
     }
+
+    //------------------------------------------------------------------------------------
+    // BitID from the registry-owned info*, not the caller module's possibly-unregistered info_v copy
+    // (DLL vs host). Span entries may be either; GUID resolves to the locked registration.
+    inline
+    bool HaveAllComponents(const bits& Bits, std::span<const xecs::component::type::info* const > Span ) noexcept
+    {
+        for( auto& e : Span )
+        {
+            const auto* pReg = e ? xecs::component::mgr::findComponentTypeInfo(e->m_Guid) : nullptr;
+            const int Bit = pReg ? pReg->m_BitID : (e ? e->m_BitID : -1);
+            if( Bit < 0 || Bits.getBit( Bit ) == false ) return false;
+        }
+        return true;
+    }
+
+    //------------------------------------------------------------------------------------
+    template< typename... T_COMPONENTS >
+    inline
+    bool HaveAllComponents( const bits& Bits, std::tuple<T_COMPONENTS...>* ) noexcept
+    {
+        return ((Bits.getBit( xecs::component::mgr::findComponentTypeInfo(xecs::component::type::info_v<T_COMPONENTS>.m_Guid)->m_BitID ) && ... ));
+    }
+
 }
