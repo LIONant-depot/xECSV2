@@ -787,17 +787,35 @@ namespace xecs::scene
                 }
             }
 
+            // Soft-fail dangling external refs the same way the local-ref remap just below does
+            // (encode null + WARNING, keep loading). A hard Failure here used to make the WHOLE
+            // Level unopenable whenever one parent permanent_id had been deleted/skipped (e.g. after
+            // Make Prefab deleted a referenced entity and the scene was saved) - same class of
+            // "one hole must not take the whole scene down" that EnsureLoaded's own per-entity
+            // skip and RemapLoadedEntityReferences' local .find()-or-null already established.
             Scene.m_ExternalToRuntime.resize( Scene.m_ExternalRefTable.size() );
             for( std::size_t i = 0; i < Scene.m_ExternalRefTable.size(); ++i )
             {
                 auto& Addr    = Scene.m_ExternalRefTable[i];
                 auto* pParent = Mgr.Find(Addr.m_ParentScene);
                 if( pParent == nullptr )
-                    return xerr::create<xecs::game_mgr::state::FAILURE, "Scene external reference points at a scene that failed to load">();
+                {
+                    std::printf("[Scene::EnsureLoaded] WARNING: external-ref[%zu] points at parent scene 0x%llX which failed to load / is not resident - encoding as null\n"
+                        , i, (unsigned long long)Addr.m_ParentScene.m_Instance.m_Value);
+                    std::fflush(stdout);
+                    Scene.m_ExternalToRuntime[i] = xecs::component::entity{};
+                    continue;
+                }
 
                 auto It = pParent->m_LocalToRuntime.find(Addr.m_ParentEntity);
                 if( It == pParent->m_LocalToRuntime.end() )
-                    return xerr::create<xecs::game_mgr::state::FAILURE, "Scene external reference points at a permanent_id that does not exist in the parent scene">();
+                {
+                    std::printf("[Scene::EnsureLoaded] WARNING: external-ref[%zu] points at permanent_id=%u in parent scene 0x%llX, which failed to load or doesn't exist - encoding as null\n"
+                        , i, (unsigned)Addr.m_ParentEntity, (unsigned long long)Addr.m_ParentScene.m_Instance.m_Value);
+                    std::fflush(stdout);
+                    Scene.m_ExternalToRuntime[i] = xecs::component::entity{};
+                    continue;
+                }
 
                 Scene.m_ExternalToRuntime[i] = It->second;
             }
