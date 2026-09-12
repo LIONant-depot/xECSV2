@@ -295,6 +295,21 @@ namespace xecs::component
 
     //---------------------------------------------------------------------------
     inline
+    void mgr::EnsureLocalBitID( const xecs::component::type::info& Info ) noexcept
+    {
+        // Fast path: local BitID still names this GUID in the locked registry (no hash).
+        if( Info.m_BitID != type::info::invalid_bit_id_v
+         && Info.m_BitID < s_Registry.m_nTypes
+         && s_Registry.m_BitsToInfo[Info.m_BitID]->m_Guid == Info.m_Guid )
+            return;
+
+        // Miss / unset / stale after reload: one map lookup, write back into THIS module's info_v.
+        if( auto* pReg = findComponentTypeInfo(Info.m_Guid) )
+            Info.m_BitID = pReg->m_BitID;
+    }
+
+    //---------------------------------------------------------------------------
+    inline
     void mgr::resetRegistrations( void ) noexcept
     {
         // Reset all known components

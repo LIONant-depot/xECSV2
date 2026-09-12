@@ -74,10 +74,9 @@ namespace xecs::tools
     requires( assert_valid_tuple_components_v < std::tuple<T_COMPONENTS...> > )
     void bits::AddFromComponents( void ) noexcept
     {
-        // Resolve BitID through the shared registry (mgr::s_Registry). Direct info_v<T>.m_BitID is
-        // only valid in the module that RegisterComponent'd T; XECS_API callers (SerializeGameState
-        // in xECSV2.dll) see a separate, still-invalid info_v copy for host-registered types.
-        ((setBit(xecs::component::mgr::findComponentTypeInfo(xecs::component::type::info_v<T_COMPONENTS>.m_Guid)->m_BitID)), ...);
+        // EnsureLocalBitID: at most one registry map lookup per type per module, then raw m_BitID.
+        ((xecs::component::mgr::EnsureLocalBitID(xecs::component::type::info_v<T_COMPONENTS>),
+          setBit(xecs::component::type::info_v<T_COMPONENTS>.m_BitID)), ...);
     }
 
     //------------------------------------------------------------------------------------
@@ -85,7 +84,8 @@ namespace xecs::tools
     requires( assert_valid_tuple_components_v < std::tuple<T_COMPONENTS...> > )
     void bits::AddFromComponents( std::tuple<T_COMPONENTS...>* ) noexcept
     {
-        ((setBit(xecs::component::mgr::findComponentTypeInfo(xecs::component::type::info_v<T_COMPONENTS>.m_Guid)->m_BitID)), ...);
+        ((xecs::component::mgr::EnsureLocalBitID(xecs::component::type::info_v<T_COMPONENTS>),
+          setBit(xecs::component::type::info_v<T_COMPONENTS>.m_BitID)), ...);
     }
 
     //------------------------------------------------------------------------------------
@@ -94,7 +94,8 @@ namespace xecs::tools
     requires( assert_valid_tuple_components_v < std::tuple<T_COMPONENTS...> > )
     void bits::ClearFromComponents( void ) noexcept
     {
-        ((clearBit(xecs::component::mgr::findComponentTypeInfo(xecs::component::type::info_v<T_COMPONENTS>.m_Guid)->m_BitID)), ...);
+        ((xecs::component::mgr::EnsureLocalBitID(xecs::component::type::info_v<T_COMPONENTS>),
+          clearBit(xecs::component::type::info_v<T_COMPONENTS>.m_BitID)), ...);
     }
 
     //------------------------------------------------------------------------------------
@@ -103,7 +104,8 @@ namespace xecs::tools
     requires( assert_valid_tuple_components_v < std::tuple<T_COMPONENTS...> > )
     void bits::ClearFromComponents( std::tuple<T_COMPONENTS...>* ) noexcept
     {
-        ((clearBit(xecs::component::mgr::findComponentTypeInfo(xecs::component::type::info_v<T_COMPONENTS>.m_Guid)->m_BitID)), ...);
+        ((xecs::component::mgr::EnsureLocalBitID(xecs::component::type::info_v<T_COMPONENTS>),
+          clearBit(xecs::component::type::info_v<T_COMPONENTS>.m_BitID)), ...);
     }
 
     //------------------------------------------------------------------------------------
@@ -228,16 +230,15 @@ namespace xecs::tools
     }
 
     //------------------------------------------------------------------------------------
-    // BitID from the registry-owned info*, not the caller module's possibly-unregistered info_v copy
-    // (DLL vs host). Span entries may be either; GUID resolves to the locked registration.
+    // Span may hold a foreign module's info*; EnsureLocalBitID syncs that copy once, then raw m_BitID.
     inline
     bool HaveAllComponents(const bits& Bits, std::span<const xecs::component::type::info* const > Span ) noexcept
     {
         for( auto& e : Span )
         {
-            const auto* pReg = e ? xecs::component::mgr::findComponentTypeInfo(e->m_Guid) : nullptr;
-            const int Bit = pReg ? pReg->m_BitID : (e ? e->m_BitID : -1);
-            if( Bit < 0 || Bits.getBit( Bit ) == false ) return false;
+            if( !e ) return false;
+            xecs::component::mgr::EnsureLocalBitID(*e);
+            if( Bits.getBit( e->m_BitID ) == false ) return false;
         }
         return true;
     }
@@ -247,7 +248,8 @@ namespace xecs::tools
     inline
     bool HaveAllComponents( const bits& Bits, std::tuple<T_COMPONENTS...>* ) noexcept
     {
-        return ((Bits.getBit( xecs::component::mgr::findComponentTypeInfo(xecs::component::type::info_v<T_COMPONENTS>.m_Guid)->m_BitID ) && ... ));
+        return ((xecs::component::mgr::EnsureLocalBitID(xecs::component::type::info_v<T_COMPONENTS>),
+                 Bits.getBit( xecs::component::type::info_v<T_COMPONENTS>.m_BitID )) && ... );
     }
 
 }
