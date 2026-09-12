@@ -94,6 +94,23 @@ namespace xecs::editor
     };
     XPROPERTY_REG(prefab_component_diff)
 
+    // Structural (child) presence vs the prefab - same compositional idea as prefab_component_diff,
+    // but the key is a MemberPath (child-index path from the PI root), not a component type guid.
+    // m_bAdded false = a prefab-defined child this instance removed; true = a child added only on
+    // the instance (wired for symmetry; removed-child is the first consumer).
+    struct prefab_hierarchy_diff
+    {
+        std::vector<std::uint32_t>  m_MemberPath;
+        bool                        m_bAdded;
+
+        XPROPERTY_DEF
+        ( "PrefabHierarchyDiff", prefab_hierarchy_diff
+        , obj_member<"MemberPath", &prefab_hierarchy_diff::m_MemberPath>
+        , obj_member<"Added",      &prefab_hierarchy_diff::m_bAdded>
+        )
+    };
+    XPROPERTY_REG(prefab_hierarchy_diff)
+
     struct prefab_instance
     {
         constexpr static auto typedef_v = xecs::component::type::data
@@ -105,12 +122,14 @@ namespace xecs::editor
         xecs::prefab::guid                          m_PrefabInstance;
         std::vector<prefab_component_override>      m_lComponents;
         std::vector<prefab_component_diff>          m_ComponentDiffs;
+        std::vector<prefab_hierarchy_diff>          m_HierarchyDiffs;
 
         XPROPERTY_DEF
         ( "EditorPrafabInstance", prefab_instance
         , obj_member<"Prefab",          &prefab_instance::m_PrefabInstance>
         , obj_member<"Components",      &prefab_instance::m_lComponents>
         , obj_member<"ComponentDiffs",  &prefab_instance::m_ComponentDiffs>
+        , obj_member<"HierarchyDiffs",  &prefab_instance::m_HierarchyDiffs>
         )
     };
     XPROPERTY_REG(prefab_instance)

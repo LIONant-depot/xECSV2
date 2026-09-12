@@ -644,6 +644,8 @@ namespace xecs::prefab
 
         Remap.insert( { Entity.m_Value, NestedRoot } );   // outer siblings referencing Entity still resolve
         xecs::persist::details::ApplyPrefabInstancePropertyOverrides( m_GameMgr, NestedRoot );
+        // Same compositional pass as component m_bAdded=false: strip children the outer PI removed.
+        xecs::persist::details::ApplyRemovedHierarchyDiffs( m_GameMgr, NestedRoot, PI );
         return NestedRoot;
     }
 

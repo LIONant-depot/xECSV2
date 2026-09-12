@@ -259,6 +259,66 @@ namespace xecs::persist::details
     }
 
     //-----------------------------------------------------------------------------------------
+    // Destroys Entity and its child subtree without scene permanent-id bookkeeping - used when
+    // applying hierarchy diffs during nested prefab place (entities may not be scene-registered yet).
+    //-----------------------------------------------------------------------------------------
+    inline void DeleteEntitySubtreeUnregistered( xecs::game_mgr::instance& GameMgr, xecs::component::entity Entity ) noexcept
+    {
+        if( !Entity.isValid() ) return;
+        auto& Details = GameMgr.m_ComponentMgr.getEntityDetails(Entity);
+        if( Details.m_pPool == nullptr ) return;
+
+        if( Details.m_pPool->findIndexComponentFromInfo(xecs::component::type::info_v<xecs::component::parent>) >= 0 )
+        {
+            const auto ParentEntity = Details.m_pPool->getComponent<xecs::component::parent>(Details.m_PoolIndex).m_Value;
+            if( ParentEntity.isValid() )
+            {
+                auto& PDetails = GameMgr.m_ComponentMgr.getEntityDetails(ParentEntity);
+                if( PDetails.m_pPool && PDetails.m_pPool->findIndexComponentFromInfo(xecs::component::type::info_v<xecs::component::children>) >= 0 )
+                {
+                    auto& List = PDetails.m_pPool->getComponent<xecs::component::children>(PDetails.m_PoolIndex).m_List;
+                    std::erase_if(List, [&](auto& E) noexcept { return E.m_Value == Entity.m_Value; });
+                }
+            }
+        }
+
+        if( Details.m_pPool->findIndexComponentFromInfo(xecs::component::type::info_v<xecs::component::children>) >= 0 )
+        {
+            auto ChildEntities = Details.m_pPool->getComponent<xecs::component::children>(Details.m_PoolIndex).m_List;
+            for( auto Child : ChildEntities )
+                DeleteEntitySubtreeUnregistered(GameMgr, Child);
+        }
+
+        auto E = Entity;
+        GameMgr.DeleteEntity(E);
+    }
+
+    //-----------------------------------------------------------------------------------------
+    // Honor PI.m_HierarchyDiffs removals on a live instance root (nested place / re-instantiate).
+    // Deepest paths first so sibling indices stay stable while deleting.
+    //-----------------------------------------------------------------------------------------
+    inline void ApplyRemovedHierarchyDiffs( xecs::game_mgr::instance& GameMgr, xecs::component::entity InstanceRoot, const xecs::editor::prefab_instance& PI ) noexcept
+    {
+        std::vector<std::vector<std::uint32_t>> Removed;
+        for( auto& D : PI.m_HierarchyDiffs )
+            if( !D.m_bAdded && !D.m_MemberPath.empty() )
+                Removed.push_back(D.m_MemberPath);
+
+        std::sort(Removed.begin(), Removed.end(), [](const auto& A, const auto& B) noexcept
+        {
+            if( A.size() != B.size() ) return A.size() > B.size();
+            return std::lexicographical_compare(A.rbegin(), A.rend(), B.rbegin(), B.rend());
+        });
+
+        for( auto& Path : Removed )
+        {
+            const auto Target = ResolveMemberPath(GameMgr, InstanceRoot, Path);
+            if( Target.isValid() )
+                DeleteEntitySubtreeUnregistered(GameMgr, Target);
+        }
+    }
+
+    //-----------------------------------------------------------------------------------------
     // LOAD, step 3 of 3 - called after the per-component file read loop has finished (which must
     // itself have already moved the parsed prefab_instance component into the entity's own pool
     // slot - this function reads it back out from there, not from a temporary, since the read loop
