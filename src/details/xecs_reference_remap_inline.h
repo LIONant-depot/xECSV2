@@ -458,11 +458,80 @@ namespace xecs::persist::details
             }
         }
 
+        // Hierarchy diffs: push structural instance changes into the Prefab ASSET (Unity Apply).
+        // 1) Resolve Added sources on the live INSTANCE (paths still valid there).
+        // 2) Apply removals on the PREFAB root (still has those members).
+        // 3) Shift each Added path for those removals, clone into the prefab under the parent path.
+        {
+            struct add_job
+            {
+                xecs::component::entity    m_Source{};
+                std::vector<std::uint32_t> m_MemberPath;
+            };
+            std::vector<add_job> Adds;
+            for (auto& D : PI.m_HierarchyDiffs)
+            {
+                if (!D.m_bAdded || D.m_MemberPath.empty()) continue;
+                const auto Src = ResolveMemberPath(GameMgr, PIRootEntity, D.m_MemberPath);
+                if (!Src.isValid()) continue;
+                Adds.push_back(add_job{ Src, D.m_MemberPath });
+            }
+
+            ApplyRemovedHierarchyDiffs(GameMgr, RootIt->second, PI);
+
+            auto& Group = GameMgr.m_PrefabMgr.m_PrefabGroups[PI.m_PrefabInstance.m_Instance.m_Value];
+            for (auto& J : Adds)
+            {
+                auto Path = J.m_MemberPath;
+                bool bDrop = false;
+                for (auto& D : PI.m_HierarchyDiffs)
+                {
+                    if (D.m_bAdded || D.m_MemberPath.empty()) continue;
+                    const auto& RemovedPath = D.m_MemberPath;
+                    if (Path.size() >= RemovedPath.size()
+                     && std::equal(RemovedPath.begin(), RemovedPath.end(), Path.begin()))
+                    { bDrop = true; break; }
+                    const auto PrefixLen = RemovedPath.size() - 1;
+                    const auto DeletedIndex = RemovedPath.back();
+                    if (Path.size() <= PrefixLen) continue;
+                    if (!std::equal(RemovedPath.begin(), RemovedPath.begin() + static_cast<std::ptrdiff_t>(PrefixLen), Path.begin())) continue;
+                    if (Path[PrefixLen] > DeletedIndex) --Path[PrefixLen];
+                }
+                if (bDrop || Path.empty()) continue;
+
+                const auto InsertIndex = Path.back();
+                std::vector<std::uint32_t> ParentPath(Path.begin(), Path.end() - 1);
+                const auto PrefabParent = ParentPath.empty()
+                    ? RootIt->second
+                    : ResolveMemberPath(GameMgr, RootIt->second, ParentPath);
+                if (!PrefabParent.isValid()) continue;
+
+                auto& PDetails = GameMgr.m_ComponentMgr.getEntityDetails(PrefabParent);
+                if (PDetails.m_pPool == nullptr) continue;
+                if (PDetails.m_pPool->findIndexComponentFromInfo(xecs::component::type::info_v<xecs::component::children>) < 0)
+                    continue;
+
+                auto NewChild = GameMgr.m_PrefabMgr.CloneEntityIntoPrefabGroup(J.m_Source, Group, /*bIsRoot=*/false);
+                if (!NewChild.isValid()) continue;
+
+                auto& ChildList = PDetails.m_pPool->getComponent<xecs::component::children>(PDetails.m_PoolIndex).m_List;
+                if (InsertIndex <= ChildList.size())
+                    ChildList.insert(ChildList.begin() + static_cast<std::ptrdiff_t>(InsertIndex), NewChild);
+                else
+                    ChildList.push_back(NewChild);
+
+                auto& CDetails = GameMgr.m_ComponentMgr.getEntityDetails(NewChild);
+                if (CDetails.m_pPool && CDetails.m_pPool->findIndexComponentFromInfo(xecs::component::type::info_v<xecs::component::parent>) >= 0)
+                    CDetails.m_pPool->getComponent<xecs::component::parent>(CDetails.m_PoolIndex).m_Value = PrefabParent;
+            }
+        }
+
         // The instance no longer differs from the prefab by definition - clear the bookkeeping
         // BEFORE saving the prefab (Save reads the prefab's own entities, not PI.m_lComponents, so
         // ordering here only matters for when the in-memory override-indicator UI updates, not for
         // save correctness).
         PI.m_lComponents.clear();
+        PI.m_HierarchyDiffs.clear();
 
         return GameMgr.m_PrefabMgr.Save(PI.m_PrefabInstance);
     }
