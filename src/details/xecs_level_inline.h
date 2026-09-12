@@ -47,15 +47,15 @@ namespace xecs::level
 
     xerr mgr::Load( guid LevelGuid ) noexcept
     {
-        auto& Level = FindOrCreate(LevelGuid);
-
+        // Find-first: refuse unknown GUIDs. FindOrCreate alone would mint an empty in-memory
+        // Level and Load used to treat a missing descriptor as success (0 scenes) - fine for
+        // raw tooling, confusing for OpenLevel/CLI demos. Only register after the descriptor exists.
         const auto Path = details::DescriptorPath(*this, LevelGuid);
         std::error_code Ec;
         if( false == std::filesystem::exists(Path, Ec) || Ec )
-        {
-            Level.m_Scenes.clear();
-            return {};
-        }
+            return xerr::create<xecs::game_mgr::state::FAILURE, "Level::mgr::Load: level descriptor not found">();
+
+        auto& Level = FindOrCreate(LevelGuid);
 
         descriptor                   Descriptor;
         xproperty::settings::context Context;

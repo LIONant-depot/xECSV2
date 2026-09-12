@@ -26,8 +26,9 @@ namespace xecs::level
         inline
         instance&   FindOrCreate( guid LevelGuid ) noexcept;
 
-        // Loads/saves the level's descriptor (its list of member scenes) from/to disk, using the
-        // real GUID-sharded Descriptors/Level/<b0>/<b1>/<guid>.desc/ layout.
+        // Loads the level descriptor from disk (GUID-sharded Descriptors/Level/... layout).
+        // Find-first: fails if the descriptor is missing (does not mint an empty Level).
+        // Use FindOrCreate when authoring a brand-new Level before Save.
         inline
         xerr        Load        ( guid LevelGuid ) noexcept;
         inline
