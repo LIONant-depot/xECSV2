@@ -282,6 +282,10 @@ namespace xecs::component
                 default: assert(false);
             }
         }
+
+        // Registered info*s already have BitIDs. Sync this module's own info_v copies (DLL builtins)
+        // in one shot so hot paths can use raw m_BitID with no map / no per-call Ensure.
+        SyncAllLocalBitIDs();
     }
 
     //---------------------------------------------------------------------------
@@ -291,21 +295,6 @@ namespace xecs::component
         auto It = s_Registry.m_ComponentInfoMap.find(Guid);
         if( It == s_Registry.m_ComponentInfoMap.end() ) return nullptr;
         return It->second;
-    }
-
-    //---------------------------------------------------------------------------
-    inline
-    void mgr::EnsureLocalBitID( const xecs::component::type::info& Info ) noexcept
-    {
-        // Fast path: local BitID still names this GUID in the locked registry (no hash).
-        if( Info.m_BitID != type::info::invalid_bit_id_v
-         && Info.m_BitID < s_Registry.m_nTypes
-         && s_Registry.m_BitsToInfo[Info.m_BitID]->m_Guid == Info.m_Guid )
-            return;
-
-        // Miss / unset / stale after reload: one map lookup, write back into THIS module's info_v.
-        if( auto* pReg = findComponentTypeInfo(Info.m_Guid) )
-            Info.m_BitID = pReg->m_BitID;
     }
 
     //---------------------------------------------------------------------------

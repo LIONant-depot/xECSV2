@@ -123,11 +123,11 @@ namespace xecs::component
         inline static
         const xecs::component::type::info*  findComponentTypeInfo   ( xecs::component::type::guid Guid
                                                                     ) noexcept;
-        // Once per type per module: if this module's info_v.m_BitID is unset/stale, copy from the
-        // shared registry (hash map). Hot path afterward is raw m_BitID (plus a cheap BitsToInfo
-        // GUID check so plugin reload cannot keep a stale local BitID).
-        inline static
-        void                                EnsureLocalBitID        ( const xecs::component::type::info& Info
+        // Called once at the end of LockComponentTypes. Runs out-of-line in the xECSV2 module so
+        // THIS binary's info_v copies of built-ins get the same BitIDs Lock just wrote onto the
+        // registered info*s. After that, hot paths use raw info_v<T>.m_BitID only (no map).
+        static XECS_API
+        void                                SyncAllLocalBitIDs      ( void
                                                                     ) noexcept;
         inline static
         void                                resetRegistrations      ( void

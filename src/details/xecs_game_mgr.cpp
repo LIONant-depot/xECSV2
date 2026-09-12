@@ -20,6 +20,31 @@ namespace xecs::component
     // includes xecs.h (xecs.cpp, E29's own .cpp, smoke_test.cpp, ...) and would violate ODR if a
     // plain out-of-line static definition were placed there instead.
     xecs::component::type::registry mgr::s_Registry{};
+
+    //---------------------------------------------------------------------------
+    // One-shot after Lock: copy BitIDs from the shared registry into THIS module's info_v
+    // singletons for xECSV2 built-ins. Registered info*s were already writeback'd in Lock;
+    // this covers the second copy that lives in the DLL when the host registered its own.
+    //---------------------------------------------------------------------------
+    void mgr::SyncAllLocalBitIDs( void ) noexcept
+    {
+        auto Sync = []( const type::info& Info ) noexcept
+        {
+            if( auto* pReg = findComponentTypeInfo(Info.m_Guid) )
+                Info.m_BitID = pReg->m_BitID;
+        };
+
+        Sync( type::info_v<entity> );
+        Sync( type::info_v<parent> );
+        Sync( type::info_v<children> );
+        Sync( type::info_v<ref_count> );
+        Sync( type::info_v<share_as_data_exclusive_tag> );
+        Sync( type::info_v<share_filter> );
+        Sync( type::info_v<entity_reference> );
+        Sync( type::info_v<xecs::prefab::tag> );
+        Sync( type::info_v<xecs::prefab::root> );
+        Sync( type::info_v<xecs::editor::prefab_instance> );
+    }
 }
 
 namespace xecs::game_mgr

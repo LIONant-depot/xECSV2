@@ -106,18 +106,10 @@ namespace xecs::game_mgr
     {
         xecs::tools::bits Bits{};
         for( auto& e : Types )
-        {
-            // Span may hold a foreign module's info*; sync that copy once, then raw m_BitID.
-            m_ComponentMgr.EnsureLocalBitID(*e);
             Bits.setBit(e->m_BitID);
-        }
 
-        // entity's info_v may be this binary's never-registered copy - EnsureLocalBitID syncs it.
-        {
-            auto& EntityInfo = xecs::component::type::info_v<xecs::component::entity>;
-            m_ComponentMgr.EnsureLocalBitID(EntityInfo);
-            Bits.setBit(EntityInfo.m_BitID);
-        }
+        // entity info_v BitID is filled by SyncAllLocalBitIDs at Lock (this module's copy).
+        Bits.setBit(xecs::component::type::info_v<xecs::component::entity>.m_BitID);
 
         return m_ArchetypeMgr.getOrCreateArchetype(Bits);
     }
