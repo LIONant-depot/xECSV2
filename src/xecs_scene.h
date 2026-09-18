@@ -194,6 +194,12 @@ namespace xecs::scene
         inline
         xerr        SaveEntity          ( guid SceneGuid, permanent_id Id, xecs::component::entity Entity ) noexcept;
 
+        // Writes ComponentDeps.txt - see details::ComponentDepsPath's own comment for what this file
+        // is for. Called automatically from SaveScene; exposed separately too in case a future caller
+        // needs to force-regenerate it without a full scene save.
+        inline
+        xerr        SaveSceneComponentDependencies ( guid SceneGuid ) noexcept;
+
         // The actual "Save this scene" entry point: resolves instance::m_PendingChanges (see its own
         // comment) into actual disk writes/deletes via SaveEntity, each sanity-checked against whether
         // its file already exists, then calls SaveSceneDescriptor for the descriptor write. Cost is
@@ -225,4 +231,22 @@ namespace xecs::scene
         // Descriptors/Scene/<b0>/<b1>/<guid>.desc/ convention every other resource type uses.
         std::wstring                              m_ProjectPath;
     };
+
+    // One entry of a scene's ComponentDeps.txt manifest (see SaveSceneComponentDependencies/
+    // LoadSceneComponentDependencies). m_Name is captured at SAVE time so a caller can still show a
+    // human-readable "component X is missing" message even after the type is genuinely gone from
+    // every currently-loaded DLL - there would be nothing else to get a display name from at that
+    // point, since the registry lookup that would normally supply it is exactly what's failing.
+    struct component_dependency
+    {
+        xecs::component::type::guid m_Guid {};
+        std::string                 m_Name {};
+    };
+
+    // Standalone read of a scene's dependency manifest - no game_mgr::instance, no entity/archetype
+    // construction, safe to call from anywhere that knows a project path and a scene guid (a command-
+    // bus Query, an idle-work background thread, a pre-flight check before any world even exists).
+    // See SaveSceneComponentDependencies's own comment for what writes this file.
+    inline
+    std::vector<component_dependency> LoadSceneComponentDependencies( std::wstring_view ProjectPath, guid SceneGuid ) noexcept;
 }

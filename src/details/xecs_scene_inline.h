@@ -46,6 +46,20 @@ namespace xecs::scene
             return SceneFolder(Mgr, SceneGuid) + L"/Descriptor.txt";
         }
 
+        // Component-type dependency manifest - "which component types does this scene's own entity
+        // data actually use" - a separate, small file (not a field on the descriptor above), matching
+        // the existing dependencies.txt convention this project's asset pipeline already uses: cheap
+        // to bulk-scan project-wide without opening any entity data (the descriptor itself doesn't
+        // carry component-type info at all - only each individual .entity file's own "ComponentTypes"
+        // record does, see SaveEntity/LoadEntity), and independently regenerable without touching the
+        // descriptor's own timestamp. See SaveSceneComponentDependencies's own comment for what writes
+        // it and why.
+        inline std::wstring ComponentDepsPath( std::wstring_view ProjectPath, guid SceneGuid ) noexcept
+        {
+            return SceneFolder(ProjectPath, SceneGuid) + L"/ComponentDeps.txt";
+        }
+        inline std::wstring ComponentDepsPath( mgr& Mgr, guid SceneGuid ) noexcept { return ComponentDepsPath(std::wstring_view(Mgr.m_ProjectPath), SceneGuid); }
+
         inline std::wstring EntityDbFolder( std::wstring_view ProjectPath, guid SceneGuid ) noexcept
         {
             return SceneFolder(ProjectPath, SceneGuid) + L"/entity_db";
@@ -519,7 +533,130 @@ namespace xecs::scene
         // transactional, which remains a real, understood, and currently accepted gap.
         //
         // Writes the descriptor, including a freshly-recomputed m_ActiveEntities - see its own comment.
-        return SaveSceneDescriptor(SceneGuid);
+        if( auto Err = SaveSceneDescriptor(SceneGuid); Err ) return Err;
+
+        // Regenerated unconditionally on every Save, same as the descriptor above - see its own
+        // comment for why this is a separate file rather than a descriptor field. Best-effort: a
+        // failure here degrades a future compatibility check to "nothing to check against," it never
+        // blocks the save the user actually asked for.
+        if( auto Err = SaveSceneComponentDependencies(SceneGuid); Err )
+        {
+            std::printf("[SaveScene] SaveSceneComponentDependencies FAILED: %s\n", std::string(Err.getMessage()).c_str()); std::fflush(stdout);
+        }
+
+        return {};
+    }
+
+    //-----------------------------------------------------------------------------------------------
+    // Writes ComponentDepsPath(SceneGuid) - the union of every component-type {guid, name} used by
+    // ANY of this scene's own live entities (via Scene.m_LocalToRuntime), deduplicated by walking each
+    // DISTINCT archetype among them exactly once rather than every entity individually (entities in
+    // this project are already grouped by archetype for storage - reusing that grouping is both
+    // cheaper and naturally dedup'd). This is the "does the current registry cover what this scene
+    // needs" data source for the reload/open/module-removal compatibility checks - see the E29-side
+    // consumer for the full design ("component-registry compatibility" plan).
+    //-----------------------------------------------------------------------------------------------
+    inline
+    xerr mgr::SaveSceneComponentDependencies( guid SceneGuid ) noexcept
+    {
+        auto* pScene = Find(SceneGuid);
+        if( pScene == nullptr )
+            return xerr::create<xecs::game_mgr::state::FAILURE, "SaveSceneComponentDependencies: scene is not registered - call FindOrCreate first">();
+
+        std::vector<const xecs::archetype::instance*>   SeenArchetypes;
+        std::vector<const xecs::component::type::info*> UsedInfos;
+        for( auto& Pair : pScene->m_LocalToRuntime )
+        {
+            auto& EDetails = m_GameMgr.m_ComponentMgr.getEntityDetails(Pair.second);
+            if( EDetails.m_pPool == nullptr || EDetails.m_pPool->m_pArchetype == nullptr ) continue;
+
+            auto* pArchetype = EDetails.m_pPool->m_pArchetype;
+            if( std::find(SeenArchetypes.begin(), SeenArchetypes.end(), pArchetype) != SeenArchetypes.end() ) continue;
+            SeenArchetypes.push_back(pArchetype);
+
+            pArchetype->getComponentBits().Foreach( [&]( int, const xecs::component::type::info& Info ) noexcept
+            {
+                if( std::find(UsedInfos.begin(), UsedInfos.end(), &Info) == UsedInfos.end() )
+                    UsedInfos.push_back(&Info);
+            });
+        }
+
+        // Sorted by guid - stable, diffable file, same reasoning m_ActiveEntities/m_Folders already
+        // use in SaveSceneDescriptor above.
+        std::sort( UsedInfos.begin(), UsedInfos.end(), []( auto* A, auto* B ) noexcept { return A->m_Guid.m_Value < B->m_Guid.m_Value; } );
+
+        const auto RealPath = details::ComponentDepsPath(*this, SceneGuid);
+        const auto TempPath = RealPath + L".tmp";
+
+        // Scoped so TextFile's own destructor (which actually closes/flushes the underlying file
+        // handle - there's no separate explicit Close()) runs BEFORE the rename below, not after -
+        // std::filesystem::rename onto/over a file this process still has open fails with "being used
+        // by another process" otherwise (confirmed live). SaveSceneDescriptor's own equivalent temp+
+        // rename step doesn't hit this because its Descriptor.Serialize(...) call opens/writes/closes
+        // its own xtextfile::stream entirely internally, returning only after that stream is already
+        // gone.
+        {
+            xecs::serializer::stream TextFile;
+            if( auto Err = TextFile.Open( false, TempPath, xtextfile::file_type::TEXT, xtextfile::flags{} ); Err )
+                return Err;
+
+            if( auto Err = TextFile.Record( "ComponentDeps"
+            ,   [&]( std::size_t& C, xerr& ) noexcept { C = UsedInfos.size(); }
+            ,   [&]( std::size_t i, xerr& Error ) noexcept
+                {
+                    std::uint64_t V    = UsedInfos[i]->m_Guid.m_Value;
+                    std::string   Name = UsedInfos[i]->m_pName;
+                      (Error = TextFile.Field("Guid", V))
+                    ||(Error = TextFile.Field("Name", Name));
+                }
+            ); Err )
+                return Err;
+        }
+
+        std::error_code RenameEc;
+        std::filesystem::rename( TempPath, RealPath, RenameEc );
+        if( RenameEc )
+            return xerr::create<xecs::game_mgr::state::FAILURE, "SaveSceneComponentDependencies: wrote the temp file but the atomic rename over the real one failed">();
+
+        return {};
+    }
+
+    //-----------------------------------------------------------------------------------------------
+    // Standalone read - no entity/archetype construction, no game_mgr instance needed - just the
+    // {guid, name} pairs SaveSceneComponentDependencies last wrote. Returns empty (not an error) if
+    // the file doesn't exist yet (a scene saved before this feature existed, or one that's never been
+    // saved at all) - matches this project's established "best-effort, never block on an admittedly-
+    // incomplete reference" posture for every other optional metadata file.
+    //-----------------------------------------------------------------------------------------------
+    inline
+    std::vector<component_dependency> LoadSceneComponentDependencies( std::wstring_view ProjectPath, guid SceneGuid ) noexcept
+    {
+        std::vector<component_dependency> Result;
+
+        const auto Path = details::ComponentDepsPath(ProjectPath, SceneGuid);
+        std::error_code ExistsEc;
+        if( !std::filesystem::exists( std::filesystem::path(Path), ExistsEc ) )
+            return Result;
+
+        xecs::serializer::stream TextFile;
+        if( auto Err = TextFile.Open( true, Path, xtextfile::file_type::TEXT, xtextfile::flags{} ); Err )
+            return Result;
+
+        auto ReadErr = TextFile.Record( "ComponentDeps"
+        ,   [&]( std::size_t& C, xerr& ) noexcept { Result.reserve(C); }
+        ,   [&]( std::size_t /*i*/, xerr& Error ) noexcept
+            {
+                component_dependency Entry;
+                std::uint64_t        V = 0;
+                  (Error = TextFile.Field("Guid", V))
+                ||(Error = TextFile.Field("Name", Entry.m_Name));
+                Entry.m_Guid = xecs::component::type::guid{V};
+                Result.push_back(std::move(Entry));
+            }
+        );
+        (void)ReadErr; // best-effort - a partially-read/corrupt manifest just yields whatever was parsed so far
+
+        return Result;
     }
 
     //-----------------------------------------------------------------------------------------------
