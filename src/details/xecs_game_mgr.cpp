@@ -148,6 +148,34 @@ namespace xecs::game_mgr
         //
         if(isRead == false) m_ArchetypeMgr.UpdateStructuralChanges();
 
+        // FIX (2026-09-19) - REAL BUG, found live: a game_mgr that has never had a single entity
+        // created still has m_pGlobalInfo == nullptr AND m_LastRuntimeSubrange == -1 at this point -
+        // the "GlobalInfo"/"GlobalEntities" records below only lazily initialize/commit subranges on
+        // the READ side. The "GlobalEntities" record unconditionally writes at least one element ("we
+        // don't want to deal with the case where there is a block that does not save" - its own
+        // comment) and dereferences m_pGlobalInfo[0].m_Validation unconditionally - a guaranteed
+        // access violation the very first time a live reload snapshots a genuinely empty world (no
+        // level/scene ever opened - the common case for the earliest reload trigger, e.g. right after
+        // a fresh Game.dll hot-swap or the very first window-focus-triggered rebuild). Must run HERE,
+        // before "GlobalInfo" below writes LastSubRange to the file, not after - AppendNewSubrange()
+        // bumps m_LastRuntimeSubrange from -1 to 0, and "GlobalInfo" needs to persist that post-bump
+        // value (0), not the stale -1, or a later Load's own Initialize(LastSubrangeRuntime) call
+        // would be asked to Initialize(-1) and immediately fail its own `xassert(>= 0)`.
+        //
+        // A first attempt fixed only the null-pointer half (calling Initialize(0) alone) and STILL
+        // crashed, at a different-but-adjacent address - Initialize() only VirtualAlloc's a
+        // MEM_RESERVE/PAGE_NOACCESS range (see its own body), so m_pGlobalInfo[0] was non-null but
+        // still genuinely inaccessible memory. AppendNewSubrange() is the actual unit of work that
+        // both lazily Initialize()s AND VirtualAlloc's a real MEM_COMMIT/PAGE_READWRITE page for the
+        // subrange it just bumped m_LastRuntimeSubrange into - calling it once here is what actually
+        // makes index 0 real, accessible memory, matching exactly what the READ branch below already
+        // does in its own while-loop for every OTHER case (that loop's own `< LastSubrangeRuntime`
+        // condition just never reaches -1 vs -1). Confirmed via a temporary trace that pinned the
+        // original null-pointer form of this down as the deterministic 0xc0000005 fault site (see
+        // xGPU repo's Build/RELOAD_CRASH_REPORT.md for the full investigation).
+        if( isRead == false && m_ComponentMgr.m_GlobalEntityInfos.m_LastRuntimeSubrange < 0 )
+            m_ComponentMgr.m_GlobalEntityInfos.AppendNewSubrange();
+
         //
         // Open file for writing
         //
@@ -162,8 +190,8 @@ namespace xecs::game_mgr
         //
         // Serialize some basic info
         //
-        int ArchetypeCount = isRead 
-        ? 0 
+        int ArchetypeCount = isRead
+        ? 0
         : [&]
         {
             // We only serialize archetypes that are not prefabs...
