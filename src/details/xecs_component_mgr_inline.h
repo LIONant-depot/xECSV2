@@ -165,9 +165,11 @@ namespace xecs::component
     requires (xecs::component::type::is_valid_v<T_COMPONENT>)
     void mgr::RegisterComponent(xecs::plugin::token Owner) noexcept
     {
-        assert( s_Registry.m_isLocked == false );
         if (component::type::info_v<T_COMPONENT>.m_BitID == type::info::invalid_bit_id_v)
         {
+            // Registering a type that is already registered is harmless after the registry is locked (every world constructs
+            // the engine's own components); only a NEW type is refused.
+            assert( s_Registry.m_isLocked == false );
             if constexpr( component::type::info_v<T_COMPONENT>.m_TypeID == xecs::component::type::id::SHARE )
             {
                 T_COMPONENT X{};
