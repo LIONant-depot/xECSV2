@@ -9,7 +9,9 @@
 //
 // SYSTEM
 //
-#define NOMINMAX
+#ifndef NOMINMAX
+    #define NOMINMAX
+#endif
 #include "Windows.h"
 
 // Windows.h (via wingdi.h) #defines ERROR as a plain numeric macro - harmless on its own, but fatal
