@@ -292,6 +292,33 @@ namespace xecs::component
 
     //---------------------------------------------------------------------------
 
+    template< typename...T_COMPONENTS >
+    void mgr::SyncLocalBitIDs( void ) noexcept
+    {
+        assert( s_Registry.m_isLocked );
+
+        auto Sync = []( const type::info& Info, bool bRequired = false ) noexcept
+        {
+            auto* pReg = findComponentTypeInfo(Info.m_Guid);
+            assert( (pReg || !bRequired) && "SyncLocalBitIDs: type was never registered by any binary" );
+            if( pReg ) Info.m_BitID = pReg->m_BitID;
+        };
+
+        Sync( type::info_v<entity> );
+        Sync( type::info_v<parent> );
+        Sync( type::info_v<children> );
+        Sync( type::info_v<ref_count> );
+        Sync( type::info_v<share_as_data_exclusive_tag> );
+        Sync( type::info_v<share_filter> );
+        Sync( type::info_v<entity_reference> );
+        Sync( type::info_v<xecs::prefab::tag> );
+        Sync( type::info_v<xecs::prefab::root> );
+        Sync( type::info_v<xecs::editor::prefab_instance> );
+        ( Sync( type::info_v<T_COMPONENTS>, true ), ... );
+    }
+
+    //---------------------------------------------------------------------------
+
     const xecs::component::type::info* mgr::findComponentTypeInfo( xecs::component::type::guid Guid ) noexcept
     {
         auto It = s_Registry.m_ComponentInfoMap.find(Guid);

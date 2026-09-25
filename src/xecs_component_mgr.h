@@ -129,6 +129,14 @@ namespace xecs::component
         static XECS_API
         void                                SyncAllLocalBitIDs      ( void
                                                                     ) noexcept;
+        // Same one-shot sync, but inline - so it writes the CALLING binary's own info_v copies (of the
+        // built-ins, plus T_COMPONENTS: types some other binary registered that this one queries/creates,
+        // e.g. LIONRender.dll using LIONCore.dll's rigid_body). Call after Lock, before any system that
+        // touches those types is created. Once-per-registration cost; hot paths stay raw m_BitID.
+        template< typename...T_COMPONENTS >
+        inline static
+        void                                SyncLocalBitIDs         ( void
+                                                                    ) noexcept;
         inline static
         void                                resetRegistrations      ( void
                                                                     ) noexcept;

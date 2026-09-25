@@ -53,7 +53,15 @@ namespace xecs::level
         const auto Path = details::DescriptorPath(*this, LevelGuid);
         std::error_code Ec;
         if( false == std::filesystem::exists(Path, Ec) || Ec )
-            return xerr::create<xecs::game_mgr::state::FAILURE, "Level::mgr::Load: level descriptor not found">();
+        {
+            // A freshly created Level asset (Asset Browser / CreateAsset) has only its info.txt -
+            // nothing writes Descriptor.txt until the first Save. Known asset, no scenes yet: open empty.
+            if( false == std::filesystem::exists(details::LevelFolder(*this, LevelGuid) + L"/info.txt", Ec) || Ec )
+                return xerr::create<xecs::game_mgr::state::FAILURE, "Level::mgr::Load: level descriptor not found">();
+
+            FindOrCreate(LevelGuid).m_Scenes.clear();
+            return {};
+        }
 
         auto& Level = FindOrCreate(LevelGuid);
 
