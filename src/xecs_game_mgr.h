@@ -197,6 +197,15 @@ namespace xecs::game_mgr
         XECS_API
         void                                Stop                    ( void
                                                                     ) noexcept;
+
+        // Type-erased share-component copy-on-write: given new bytes for Info on Entity, find/create
+        // the matching pool family and MoveIn. Public wrapper around the protected
+        // getOrCreatePoolFamilyFromSameArchetype path used by getEntity's mutable-share edits.
+        // No-op (returns true) when the entity is already on a family with that exact key.
+        inline bool                         ReinternShareComponent  ( xecs::component::entity Entity
+                                                                    , const xecs::component::type::info& Info
+                                                                    , std::byte* pNewData
+                                                                    ) noexcept;
         // Forwards to xecs::component::mgr::UnregisterPlugin - see that method's own comment for
         // exactly what it does (and does not yet do). The API a future plugin loader actually calls
         // as part of Phase 8A's teardown sequence, kept on instance for symmetry with

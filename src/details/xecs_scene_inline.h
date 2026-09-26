@@ -272,17 +272,23 @@ namespace xecs::scene
 
             auto& Archetype = Mgr.m_GameMgr.getOrCreateArchetype( { ArchetypeInfos.data(), ArchetypeInfos.size() } );
 
-            std::vector<std::byte*> MoveData( ArchetypeInfos.size(), nullptr );
-            auto NewEntity = Archetype.CreateEntity( { ArchetypeInfos.data(), ArchetypeInfos.size() }, { MoveData.data(), MoveData.size() } );
-
-            auto& EDetails = Mgr.m_GameMgr.m_ComponentMgr.getEntityDetails(NewEntity);
-            auto& Pool      = *EDetails.m_pPool;
+            // CreateEntity(Infos, MoveData) asserts MoveData.size()==1 whenever the archetype
+            // has SHARE components, and findIndexComponentFromInfo fails for SHARE on the
+            // entity DATA pool anyway. Default-construct into the default share family;
+            // DATA values are filled below, SHARE values are re-interned from the file.
+            auto NewEntity = Archetype.CreateEntity();
 
             if( bIsPrefabInstance )
                 xecs::persist::details::CopyPrefabInstanceDefaults( Mgr.m_GameMgr, PrefabRootEntity, NewEntity, ArchetypeInfos );
 
             for( auto pInfo : Infos )
             {
+                // Re-resolve every iteration: ReinternShareComponent (and CopyPrefabInstanceDefaults
+                // for SHARE) may MoveIn the entity into a different pool family, invalidating any
+                // earlier EDetails/Pool references.
+                auto& EDetails = Mgr.m_GameMgr.m_ComponentMgr.getEntityDetails(NewEntity);
+                auto& Pool      = *EDetails.m_pPool;
+
                 if( xecs::component::type::IsComponentType<xecs::editor::prefab_instance>(pInfo) )
                 {
                     // TempPI already holds this component's fully-parsed data (read once, above,
@@ -297,7 +303,32 @@ namespace xecs::scene
                 // Anything else reaching here is either a plain entity's ordinary component, or a
                 // prefab instance's own "added only to this instance" component (no prefab default
                 // exists for it, so it's fully serialized exactly like an ordinary one) - same read
-                // either way.
+                // either way. SHARE is special: values live on the share-entity, so deserialize
+                // into a scratch buffer then re-intern (matching editor share property edits).
+                if( pInfo->m_TypeID == xecs::component::type::id::SHARE )
+                {
+                    std::vector<std::byte> Scratch( pInfo->m_Size );
+                    if( pInfo->m_pConstructFn ) pInfo->m_pConstructFn( Scratch.data() );
+                    if( auto Err = xecs::persist::details::SerializeOneComponent(TextFile, true, *pInfo, Scratch.data()); Err )
+                    {
+                        std::printf("[Scene::LoadEntity] Id=%u : share component '%s' failed to read (%s)\n", FileId, pInfo->m_pName, std::string(Err.getMessage()).c_str());
+                        std::fflush(stdout);
+                        if( pInfo->m_pDestructFn ) pInfo->m_pDestructFn( Scratch.data() );
+                        auto E = NewEntity;
+                        Mgr.m_GameMgr.DeleteEntity(E);
+                        return Err;
+                    }
+                    if( false == Mgr.m_GameMgr.ReinternShareComponent( NewEntity, *pInfo, Scratch.data() ) )
+                    {
+                        if( pInfo->m_pDestructFn ) pInfo->m_pDestructFn( Scratch.data() );
+                        auto E = NewEntity;
+                        Mgr.m_GameMgr.DeleteEntity(E);
+                        return xerr::create<xecs::game_mgr::state::FAILURE, "Scene entity failed to re-intern a share component on load">();
+                    }
+                    if( pInfo->m_pDestructFn ) pInfo->m_pDestructFn( Scratch.data() );
+                    continue;
+                }
+
                 const auto iType = Pool.findIndexComponentFromInfo(*pInfo);
                 assert(iType >= 0);
                 auto pData = &Pool.m_pComponent[iType][ EDetails.m_PoolIndex.m_Value * pInfo->m_Size ];
@@ -668,9 +699,15 @@ namespace xecs::scene
         auto& EDetails  = m_GameMgr.m_ComponentMgr.getEntityDetails(Entity);
         auto& Archetype = *EDetails.m_pPool->m_pArchetype;
         auto  DataSpan  = Archetype.getDataComponentInfos();
+        auto  ShareSpan = Archetype.getShareComponentInfos();
+        std::vector<const xecs::component::type::info*> AllComponentSpan;
+        AllComponentSpan.reserve(DataSpan.size() + ShareSpan.size());
+        for( auto p : DataSpan  ) AllComponentSpan.push_back(p);
+        for( auto p : ShareSpan ) AllComponentSpan.push_back(p);
 
-        std::printf("[SaveEntity] Id=%u Entity.m_Value=%llu DataSpan (%zu):", Id, (unsigned long long)Entity.m_Value, DataSpan.size());
-        for( auto pInfo : DataSpan ) std::printf(" %s", pInfo->m_pName);
+        std::printf("[SaveEntity] Id=%u Entity.m_Value=%llu DataSpan (%zu) ShareSpan (%zu):", Id, (unsigned long long)Entity.m_Value, DataSpan.size(), ShareSpan.size());
+        for( auto pInfo : DataSpan  ) std::printf(" %s", pInfo->m_pName);
+        for( auto pInfo : ShareSpan ) std::printf(" %s", pInfo->m_pName);
         std::printf("\n"); std::fflush(stdout);
 
         // Computes PrefabOwnedGuids (what's 100% reconstructable from the prefab, so shouldn't get
@@ -759,9 +796,10 @@ namespace xecs::scene
 
         for( auto pInfo : Infos )
         {
-            const auto iType = EDetails.m_pPool->findIndexComponentFromInfo(*pInfo);
-            assert(iType >= 0);
-            auto pLive = &EDetails.m_pPool->m_pComponent[iType][ EDetails.m_PoolIndex.m_Value * pInfo->m_Size ];
+            // DATA: entity pool. SHARE: share-entity via family (never in the entity DATA pool).
+            auto* pLive = xecs::persist::details::ResolveLiveComponentPointer( m_GameMgr, Entity, *pInfo );
+            assert(pLive != nullptr);
+            if( pLive == nullptr ) return xerr::create<xecs::game_mgr::state::FAILURE, "SaveEntity could not resolve a component instance">();
 
             // std::vector<std::byte>(Size) only zero-fills raw bytes - it never runs T's real
             // constructor. For a purely-POD component (m_pCopyFn == nullptr, plain memcpy below) that's
@@ -828,7 +866,7 @@ namespace xecs::scene
             if( xecs::component::type::IsComponentType<xecs::editor::prefab_instance>(pInfo) )
             {
                 auto& PI_Scratch = *reinterpret_cast<xecs::editor::prefab_instance*>(Scratch.data());
-                xecs::persist::details::RefreshPrefabInstanceOverlayRecord( m_GameMgr, Entity, DataSpan, PrefabOwnedGuids, PI_Scratch );
+                xecs::persist::details::RefreshPrefabInstanceOverlayRecord( m_GameMgr, Entity, AllComponentSpan, PrefabOwnedGuids, PI_Scratch );
             }
 
             const auto Error = xecs::persist::details::SerializeOneComponent(TextFile, false, *pInfo, Scratch.data());

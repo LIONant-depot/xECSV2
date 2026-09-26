@@ -44,6 +44,10 @@ namespace xecs::archetype
                                 getDataComponentInfos   ( void
                                                         ) const noexcept { return { m_InfoArray.data(), static_cast<std::size_t>(m_nDataComponents) }; }
         constexpr __inline
+        std::span<const xecs::component::type::info* const>
+                                getShareComponentInfos  ( void
+                                                        ) const noexcept { return { m_InfoArray.data() + m_nDataComponents, static_cast<std::size_t>(m_nShareComponents) }; }
+        constexpr __inline
         int                     getShareComponentCount  ( void
                                                         ) const noexcept { return m_nShareComponents; }
         constexpr __inline

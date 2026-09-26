@@ -115,6 +115,40 @@ namespace xecs::persist::details
     }
 
     //-----------------------------------------------------------------------------------------
+    // Live component bytes for DATA (entity pool) or SHARE (share-entity referenced by the
+    // pool family). SHARE values are NEVER stored in the entity's data pool - SaveEntity/
+    // LoadEntity and the editor property path all go through this same shape.
+    //-----------------------------------------------------------------------------------------
+    inline std::byte* ResolveLiveComponentPointer
+    ( xecs::game_mgr::instance& GameMgr
+    , xecs::component::entity Entity
+    , const xecs::component::type::info& Info
+    ) noexcept
+    {
+        if( false == Entity.isValid() ) return nullptr;
+        auto& Details = GameMgr.m_ComponentMgr.getEntityDetails(Entity);
+        if( Details.m_pPool == nullptr ) return nullptr;
+
+        const auto iType = Details.m_pPool->findIndexComponentFromInfo(Info);
+        if( iType >= 0 )
+            return &Details.m_pPool->m_pComponent[iType][ Details.m_PoolIndex.m_Value * Info.m_Size ];
+
+        if( Info.m_TypeID != xecs::component::type::id::SHARE ) return nullptr;
+        auto* pFamily = Details.m_pPool->m_pMyFamily;
+        if( pFamily == nullptr ) return nullptr;
+
+        for( int i = 0, end = static_cast<int>(pFamily->m_ShareInfos.size()); i < end; ++i )
+        {
+            if( pFamily->m_ShareInfos[i]->m_Guid.m_Value != Info.m_Guid.m_Value ) continue;
+            auto& ShareDetails = GameMgr.m_ComponentMgr.getEntityDetails(pFamily->m_ShareDetails[i].m_Entity);
+            if( ShareDetails.m_pPool == nullptr ) return nullptr;
+            const auto iShare = ShareDetails.m_pPool->findIndexComponentFromInfo(Info);
+            if( iShare < 0 ) return nullptr;
+            return &ShareDetails.m_pPool->m_pComponent[iShare][ ShareDetails.m_PoolIndex.m_Value * Info.m_Size ];
+        }
+        return nullptr;
+    }
+    //-----------------------------------------------------------------------------------------
     // LOAD, step 1 of 3 - called right after an entity file's own ComponentTypes list (Infos) has
     // been read, BEFORE the archetype/entity even exists: if Infos names xecs::editor::prefab_instance,
     // reads it standalone (its "which prefab" guid is needed to union the archetype in the first
@@ -157,7 +191,15 @@ namespace xecs::persist::details
 
         auto& RootDetails   = GameMgr.m_ComponentMgr.getEntityDetails(OutPrefabRootEntity);
         auto& RootArchetype = *RootDetails.m_pPool->m_pArchetype;
-        for( auto pRootInfo : RootArchetype.getDataComponentInfos() )
+        std::vector<const xecs::component::type::info*> RootInfos;
+        {
+            auto DataSpan  = RootArchetype.getDataComponentInfos();
+            auto ShareSpan = RootArchetype.getShareComponentInfos();
+            RootInfos.reserve(DataSpan.size() + ShareSpan.size());
+            for( auto p : DataSpan  ) RootInfos.push_back(p);
+            for( auto p : ShareSpan ) RootInfos.push_back(p);
+        }
+        for( auto pRootInfo : RootInfos )
         {
             if( xecs::component::type::IsComponentType<xecs::component::entity>(pRootInfo) ) continue;
 
@@ -217,6 +259,22 @@ namespace xecs::persist::details
         for( auto pInfo : ArchetypeInfos )
         {
             if( xecs::component::type::IsComponentType<xecs::component::entity>(pInfo) ) continue;
+
+            // SHARE lives on the family share-entity, not in either DATA pool - reintern
+            // NewEntity into the prefab root's share value (same copy-on-write path the
+            // editor uses when editing a share property).
+            if( pInfo->m_TypeID == xecs::component::type::id::SHARE )
+            {
+                auto* pSrc = ResolveLiveComponentPointer(GameMgr, PrefabRootEntity, *pInfo);
+                if( pSrc == nullptr ) continue;
+                std::vector<std::byte> Scratch( pInfo->m_Size );
+                if( pInfo->m_pConstructFn ) pInfo->m_pConstructFn( Scratch.data() );
+                if( pInfo->m_pCopyFn ) pInfo->m_pCopyFn( Scratch.data(), pSrc );
+                else                   std::memcpy( Scratch.data(), pSrc, pInfo->m_Size );
+                GameMgr.ReinternShareComponent( NewEntity, *pInfo, Scratch.data() );
+                if( pInfo->m_pDestructFn ) pInfo->m_pDestructFn( Scratch.data() );
+                continue;
+            }
 
             const auto iSrcType = RootDetails.m_pPool->findIndexComponentFromInfo(*pInfo);
             const auto iDstType = Pool.findIndexComponentFromInfo(*pInfo);
@@ -584,7 +642,16 @@ namespace xecs::persist::details
             else if( auto RootIt = GameMgr.m_PrefabMgr.m_PrefabList.find(pPI->m_PrefabInstance.m_Instance.m_Value); RootIt != GameMgr.m_PrefabMgr.m_PrefabList.end() )
             {
                 auto& RootDetails = GameMgr.m_ComponentMgr.getEntityDetails(RootIt->second);
-                for( auto pRootInfo : RootDetails.m_pPool->m_pArchetype->getDataComponentInfos() )
+                auto& RootArchetype = *RootDetails.m_pPool->m_pArchetype;
+                std::vector<const xecs::component::type::info*> RootInfos;
+                {
+                    auto DataSpan  = RootArchetype.getDataComponentInfos();
+                    auto ShareSpan = RootArchetype.getShareComponentInfos();
+                    RootInfos.reserve(DataSpan.size() + ShareSpan.size());
+                    for( auto p : DataSpan  ) RootInfos.push_back(p);
+                    for( auto p : ShareSpan ) RootInfos.push_back(p);
+                }
+                for( auto pRootInfo : RootInfos )
                 {
                     if( xecs::component::type::IsComponentType<xecs::prefab::root>(pRootInfo) ) continue;
 
@@ -604,17 +671,20 @@ namespace xecs::persist::details
             }
         }
 
-        OutInfosToWrite.reserve(DataSpan.size());
-        for( auto pInfo : DataSpan )
+        auto ShareSpan = Archetype.getShareComponentInfos();
+        OutInfosToWrite.reserve(DataSpan.size() + ShareSpan.size());
+        auto Consider = [&]( const xecs::component::type::info* pInfo ) noexcept
         {
-            if( xecs::component::type::IsComponentType<xecs::component::entity>(pInfo) ) continue;
+            if( xecs::component::type::IsComponentType<xecs::component::entity>(pInfo) ) return;
 
             if( pPI != nullptr && !xecs::component::type::IsComponentType<xecs::editor::prefab_instance>(pInfo)
              && std::find(OutPrefabOwnedGuids.begin(), OutPrefabOwnedGuids.end(), pInfo->m_Guid.m_Value) != OutPrefabOwnedGuids.end() )
-                continue;
+                return;
 
             OutInfosToWrite.push_back(pInfo);
-        }
+        };
+        for( auto pInfo : DataSpan  ) Consider(pInfo);
+        for( auto pInfo : ShareSpan ) Consider(pInfo);
 
         if( auto It = std::find_if(OutInfosToWrite.begin(), OutInfosToWrite.end(), xecs::component::type::IsComponentType<xecs::editor::prefab_instance>); It != OutInfosToWrite.end() && It != OutInfosToWrite.begin() )
             std::iter_swap(OutInfosToWrite.begin(), It);

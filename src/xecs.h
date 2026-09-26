@@ -1,4 +1,4 @@
-#ifndef XECS_H
+﻿#ifndef XECS_H
 #define XECS_H
 #pragma once
 
@@ -139,6 +139,7 @@ struct std::hash<xresource::guid<T>>
 #include "xecs_prefab.h"
 #include "xecs_prefab_mgr.h"
 #include "xecs_prefab_descriptor.h"
+#include "xecs_shared_component_template.h"
 #include "xecs_system.h"
 #include "xecs_system_mgr.h"
 #include "xecs_game_mgr.h"

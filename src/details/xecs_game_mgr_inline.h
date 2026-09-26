@@ -704,4 +704,25 @@ instance::AddOrRemoveComponents
         
         return PrefabVariantGuid;
     }
+
+    //---------------------------------------------------------------------------
+    inline bool instance::ReinternShareComponent( xecs::component::entity Entity, const xecs::component::type::info& Info, std::byte* pNewData ) noexcept
+    {
+        if (Entity.isValid() == false || pNewData == nullptr) return false;
+        if (Info.m_TypeID != xecs::component::type::id::SHARE) return false;
+
+        auto& Details = m_ComponentMgr.getEntityDetails(Entity);
+        if (!Details.m_pPool || !Details.m_pPool->m_pMyFamily || !Details.m_pPool->m_pArchetype) return false;
+
+        const auto NewKey = xecs::component::type::details::ComputeShareKey(Details.m_pPool->m_pArchetype->getGuid(), Info, pNewData);
+        xecs::tools::bits UpdatedBits;
+        UpdatedBits.setBit(Info.m_BitID);
+
+        auto& NewFamily = Details.m_pPool->m_pArchetype->getOrCreatePoolFamilyFromSameArchetype(
+            *Details.m_pPool->m_pMyFamily, UpdatedBits, { &pNewData, 1u }, { &NewKey, 1u });
+        if (&NewFamily == Details.m_pPool->m_pMyFamily) return true;
+
+        NewFamily.MoveIn(*this, *Details.m_pPool->m_pMyFamily, *Details.m_pPool, Details.m_PoolIndex);
+        return true;
+    }
 }

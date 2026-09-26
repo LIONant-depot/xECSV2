@@ -878,6 +878,11 @@ AddOrRemoveComponents
             auto& EDetails  = GameMgr.m_ComponentMgr.getEntityDetails(Entity);
             auto& Archetype = *EDetails.m_pPool->m_pArchetype;
             auto  DataSpan  = Archetype.getDataComponentInfos();
+            auto  ShareSpan = Archetype.getShareComponentInfos();
+            std::vector<const xecs::component::type::info*> AllComponentSpan;
+            AllComponentSpan.reserve(DataSpan.size() + ShareSpan.size());
+            for( auto p : DataSpan  ) AllComponentSpan.push_back(p);
+            for( auto p : ShareSpan ) AllComponentSpan.push_back(p);
 
             std::vector<const xecs::component::type::info*> Infos;
             std::vector<std::uint64_t>                       PrefabOwnedGuids;
@@ -926,9 +931,9 @@ AddOrRemoveComponents
             {
                 std::printf("[Prefab::SaveGroupMember DEBUG] Id=%u writing component '%s' ReferenceMode=%d\n", Id, pInfo->m_pName, (int)pInfo->m_ReferenceMode);
                 std::fflush(stdout);
-                const auto iType = EDetails.m_pPool->findIndexComponentFromInfo(*pInfo);
-                assert(iType >= 0);
-                auto pLive = &EDetails.m_pPool->m_pComponent[iType][ EDetails.m_PoolIndex.m_Value * pInfo->m_Size ];
+                auto* pLive = xecs::persist::details::ResolveLiveComponentPointer( GameMgr, Entity, *pInfo );
+                assert(pLive != nullptr);
+                if( pLive == nullptr ) return xerr::create<xecs::game_mgr::state::FAILURE, "SaveGroupMember could not resolve a component instance">();
 
                 std::vector<std::byte> Scratch( pInfo->m_Size );
                 if( pInfo->m_pConstructFn ) pInfo->m_pConstructFn( Scratch.data() );
@@ -993,7 +998,7 @@ AddOrRemoveComponents
                 if( xecs::component::type::IsComponentType<xecs::editor::prefab_instance>(pInfo) )
                 {
                     auto& PI_Scratch = *reinterpret_cast<xecs::editor::prefab_instance*>(Scratch.data());
-                    xecs::persist::details::RefreshPrefabInstanceOverlayRecord( GameMgr, Entity, DataSpan, PrefabOwnedGuids, PI_Scratch );
+                    xecs::persist::details::RefreshPrefabInstanceOverlayRecord( GameMgr, Entity, AllComponentSpan, PrefabOwnedGuids, PI_Scratch );
                 }
 
                 const auto Error = xecs::persist::details::SerializeOneComponent(TextFile, false, *pInfo, Scratch.data());
@@ -1076,28 +1081,47 @@ AddOrRemoveComponents
 
             auto& Archetype = GameMgr.getOrCreateArchetype( { ArchetypeInfos.data(), ArchetypeInfos.size() } );
 
-            // Tag components carry no data and are never part of a pool's per-entity DATA storage -
-            // CreateEntity's Infos/MoveData span must only list DATA components.
-            std::vector<const xecs::component::type::info*> DataInfos;
-            DataInfos.reserve(ArchetypeInfos.size());
-            for( auto pInfo : ArchetypeInfos )
-                if( pInfo->m_TypeID != xecs::component::type::id::TAG )
-                    DataInfos.push_back(pInfo);
-
-            std::vector<std::byte*> MoveData( DataInfos.size(), nullptr );
-            auto NewEntity = Archetype.CreateEntity( { DataInfos.data(), DataInfos.size() }, { MoveData.data(), MoveData.size() } );
-
-            auto& EDetails = GameMgr.m_ComponentMgr.getEntityDetails(NewEntity);
-            auto& Pool     = *EDetails.m_pPool;
+            // Default-construct into the default share family. CreateEntity(Infos, MoveData)
+            // cannot accept SHARE entries (assert MoveData.size()==1 when m_nShareComponents>0;
+            // SHARE bytes are not in the entity DATA pool). DATA filled below; SHARE re-interned.
+            auto NewEntity = Archetype.CreateEntity();
 
             if( bIsPrefabInstance )
                 xecs::persist::details::CopyPrefabInstanceDefaults( GameMgr, PrefabRootEntity, NewEntity, ArchetypeInfos );
 
             for( auto pInfo : Infos )
             {
+                // Re-resolve every iteration - SHARE reintern / prefab-default reintern may MoveIn.
+                auto& EDetails = GameMgr.m_ComponentMgr.getEntityDetails(NewEntity);
+                auto& Pool     = *EDetails.m_pPool;
+
                 if( xecs::component::type::IsComponentType<xecs::editor::prefab_instance>(pInfo) )
                 {
                     Pool.getComponent<xecs::editor::prefab_instance>(EDetails.m_PoolIndex) = std::move(TempPI);
+                    continue;
+                }
+
+                if( pInfo->m_TypeID == xecs::component::type::id::SHARE )
+                {
+                    std::vector<std::byte> Scratch( pInfo->m_Size );
+                    if( pInfo->m_pConstructFn ) pInfo->m_pConstructFn( Scratch.data() );
+                    if( auto Err = xecs::persist::details::SerializeOneComponent(TextFile, true, *pInfo, Scratch.data()); Err )
+                    {
+                        std::printf("[Prefab::LoadGroupMember] FileId=%u : share component '%s' failed to read (%s)\n", FileId, pInfo->m_pName, std::string(Err.getMessage()).c_str());
+                        std::fflush(stdout);
+                        if( pInfo->m_pDestructFn ) pInfo->m_pDestructFn( Scratch.data() );
+                        auto E = NewEntity;
+                        GameMgr.DeleteEntity(E);
+                        return Err;
+                    }
+                    if( false == GameMgr.ReinternShareComponent( NewEntity, *pInfo, Scratch.data() ) )
+                    {
+                        if( pInfo->m_pDestructFn ) pInfo->m_pDestructFn( Scratch.data() );
+                        auto E = NewEntity;
+                        GameMgr.DeleteEntity(E);
+                        return xerr::create<xecs::game_mgr::state::FAILURE, "Prefab group member failed to re-intern a share component on load">();
+                    }
+                    if( pInfo->m_pDestructFn ) pInfo->m_pDestructFn( Scratch.data() );
                     continue;
                 }
 
@@ -1123,7 +1147,10 @@ AddOrRemoveComponents
             // loaded AND the group-wide remap pass has run.
 
             if( bIsRoot )
-                Pool.getComponent<xecs::prefab::root>(EDetails.m_PoolIndex).m_Guid = PrefabGuid;
+            {
+                auto& EDetails = GameMgr.m_ComponentMgr.getEntityDetails(NewEntity);
+                EDetails.m_pPool->getComponent<xecs::prefab::root>(EDetails.m_PoolIndex).m_Guid = PrefabGuid;
+            }
 
             Group.m_LocalToRuntime[FileId]            = NewEntity;
             Group.m_RuntimeToLocal[NewEntity.m_Value]  = FileId;
