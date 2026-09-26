@@ -1044,6 +1044,9 @@ namespace xecs::scene
                     xecs::persist::details::ApplyPrefabInstancePropertyOverrides( Mgr.m_GameMgr, Pair.second );
             }
 
+            // Append() bumps m_Size; Size()/Search read m_CurrentCount until flush. Flush before
+            // marking Active so the first Play tick (and editor Search) already sees live entities.
+            Mgr.m_GameMgr.m_ArchetypeMgr.UpdateStructuralChanges();
             Scene.m_State = state::Active;
             return {};
         }

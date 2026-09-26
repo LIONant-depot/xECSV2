@@ -739,10 +739,61 @@ instance::CreateEntity
     , std::span< std::byte* >                               MoveData
     ) noexcept
     {
-        // TODO: In order for the system to work we need to call this function for share-components that is why MoveData.size()==1 is there
-        // However this is a hack and probably another function like this should be created just for the system.
-        assert( m_nShareComponents == 0 || MoveData.size() == 1 );
-        return CreateEntity( getOrCreatePoolFamily({},{}), Infos, MoveData);
+        // MoveData contract (DATA + SHARE mixed):
+        // - Infos/MoveData are parallel; TAG entries are ignored (no pool storage).
+        // - SHARE entries with non-null MoveData select/create the pool family via
+        //   getOrCreatePoolFamily (0..m_nShareComponents). Null SHARE MoveData means
+        //   "use this archetype's default for that share type" (omit from the family call).
+        // - DATA entries are moved into the entity pool after allocation.
+        // - Share-entity archetypes set m_nShareComponents=0 via share_as_data_exclusive_tag,
+        //   so their SHARE-typed component is treated as DATA here (size==1 is typical).
+        // Previously asserted MoveData.size()==1 whenever m_nShareComponents>0, which blocked
+        // any multi-SHARE (or multi-DATA-on-shared-archetype) create/load path.
+        assert( Infos.size() == MoveData.size() );
+
+        std::array< const xecs::component::type::info*, xecs::settings::max_share_components_per_entity_v > ShareInfos{};
+        std::array< std::byte*,                         xecs::settings::max_share_components_per_entity_v > ShareMove {};
+        int nShareProvided = 0;
+
+        std::vector< const xecs::component::type::info* > DataInfos;
+        std::vector< std::byte* >                         DataMove;
+        DataInfos.reserve( Infos.size() );
+        DataMove.reserve( Infos.size() );
+
+        for( std::size_t i = 0; i < Infos.size(); ++i )
+        {
+            auto* pInfo = Infos[i];
+            if( pInfo->m_TypeID == xecs::component::type::id::TAG )
+                continue;
+
+            // Parent archetypes that own share slots: SHARE values live on the family, not the
+            // entity DATA pool. Share-as-data exclusive archetypes (m_nShareComponents==0) fall
+            // through and treat the component as DATA.
+            if( pInfo->m_TypeID == xecs::component::type::id::SHARE && m_nShareComponents > 0 )
+            {
+                if( MoveData[i] != nullptr )
+                {
+                    assert( nShareProvided < xecs::settings::max_share_components_per_entity_v );
+                    ShareInfos[ nShareProvided ] = pInfo;
+                    ShareMove [ nShareProvided ] = MoveData[i];
+                    ++nShareProvided;
+                }
+                continue;
+            }
+
+            DataInfos.push_back( pInfo );
+            DataMove.push_back( MoveData[i] );
+        }
+
+        auto& Family = getOrCreatePoolFamily
+        ( std::span{ ShareInfos.data(), static_cast<std::size_t>(nShareProvided) }
+        , std::span{ ShareMove.data(),  static_cast<std::size_t>(nShareProvided) }
+        );
+        return CreateEntity
+        ( Family
+        , std::span{ DataInfos.data(), DataInfos.size() }
+        , std::span{ DataMove.data(),  DataMove.size() }
+        );
     }
 
     //--------------------------------------------------------------------------------------------
