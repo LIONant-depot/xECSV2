@@ -223,6 +223,16 @@ namespace xecs::scene
         inline
         void        MarkEntityDeleted   ( guid SceneGuid, permanent_id Id ) noexcept;
 
+        // Fired once per scene when it's about to actually RUN, not when its data finishes loading -
+        // those are different moments in the editor (opening a level to edit it loads scenes without
+        // ever firing this; pressing Play fires it for every already-open scene) and the same moment
+        // only in a real game (load == about to run there). A component's real data is guaranteed
+        // final by the time this fires (unlike NOTIFY_CREATE, which fires with default-constructed
+        // values during load - see xecs_archetype_inline.h's own comment on _CreateEntity). Handlers
+        // iterate Scene.m_LocalToRuntime directly - it's already exactly the set of entities this
+        // scene owns, no separate "just added" bookkeeping needed.
+        xecs::event::instance<instance&>         m_OnSceneReady;
+
         xecs::game_mgr::instance&                m_GameMgr;
         std::vector<std::unique_ptr<instance>>   m_SceneInstances;
 
