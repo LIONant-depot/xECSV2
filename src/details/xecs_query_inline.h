@@ -115,6 +115,7 @@ namespace xecs::query
     (((xecs::types::is_specialized_v< must, T_QUERIES>
         || xecs::types::is_specialized_v< one_of, T_QUERIES>
         || xecs::types::is_specialized_v< none_of, T_QUERIES>
+        || xecs::types::is_specialized_v< optional, T_QUERIES>
         ) && ...)
     )
     void instance::AddQueryFromTuple(std::tuple<T_QUERIES...>* ) noexcept
@@ -133,6 +134,10 @@ namespace xecs::query
             else if constexpr (std::is_same_v< t, xecs::query::none_of<T_COMPONENTS...>>)
             {
                 m_NoneOf.AddFromComponents<T_COMPONENTS...>();
+            }
+            else if constexpr (std::is_same_v< t, xecs::query::optional<T_COMPONENTS...>>)
+            {
+                // Declaration only (see query::optional) - no effect on matching.
             }
             else
             {

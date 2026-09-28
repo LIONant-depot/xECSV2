@@ -56,6 +56,11 @@ namespace xecs::archetype
         __inline
         int                     getTagComponentCount    ( void
                                                         ) const noexcept { return xecs::tools::bits{}.setupAnd(m_ComponentBits, xecs::component::mgr::s_Registry.m_TagsBits).CountComponents(); }
+        // Tags are masked out of m_InfoArray (see Initialize), so unlike Data/Share they have no span -
+        // appends the registry infos of every tag this archetype carries.
+        __inline
+        void                    AppendTagComponentInfos ( std::vector<const xecs::component::type::info*>& Out
+                                                        ) const noexcept { xecs::tools::bits{}.setupAnd(m_ComponentBits, xecs::component::mgr::s_Registry.m_TagsBits).Foreach([&](int, const xecs::component::type::info& I) noexcept { Out.push_back(&I); }); }
         constexpr __inline
         guid                     getGuid                ( void 
                                                         ) const noexcept;

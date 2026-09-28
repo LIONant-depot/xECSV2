@@ -125,6 +125,30 @@ namespace xecs::system
             guid                         m_Guid             {};
         };
 
+        // What a system declares about one component, derived at compile time from its `query` tuple
+        // and its operator() parameters (see details::access_v). For tools/debugging only - a system
+        // may still touch other components inside its own OnUpdate code.
+        enum class match : std::uint8_t
+        {   MUST        // entity must have it to be processed
+        ,   ONE_OF      // entity must have at least one of the ONE_OF set
+        ,   NONE_OF     // entity must NOT have it
+        ,   IF_PRESENT  // touched if present, never affects matching (query::optional)
+        };
+
+        enum class access : std::uint8_t
+        {   NONE        // filter only (none_of)
+        ,   READ        // const in the query tuple / const operator() parameter
+        ,   WRITE       // non-const: the system may modify it
+        };
+
+        struct component_access
+        {
+            xecs::component::type::guid     m_ComponentGuid;
+            const char*                     m_pComponentName;
+            match                           m_Match;
+            access                          m_Access;
+        };
+
         struct info
         {
             using notifier_registration = void( xecs::archetype::instance&, xecs::system::instance&) noexcept;
@@ -143,6 +167,7 @@ namespace xecs::system
             destroy_fn* const                       m_DestroyFunction;
             const char* const                       m_pName;
             const id                                m_ID;
+            const std::span<const component_access> m_Access;
         };
 
         namespace details

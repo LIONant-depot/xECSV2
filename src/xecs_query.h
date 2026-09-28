@@ -9,6 +9,12 @@ namespace xecs::query
     template< typename... T_COMPONENTS >
     struct none_of final {};
 
+    // Declaration only - never affects matching. For systems that reach a component through an
+    // optional Foreach pointer inside OnUpdate (an operator() pointer parameter means one_of instead),
+    // so tools can still report that the system touches it when present.
+    template< typename... T_COMPONENTS >
+    struct optional final {};
+
     struct instance final
     {
         tools::bits     m_Must;
@@ -40,6 +46,7 @@ namespace xecs::query
         (((xecs::types::is_specialized_v< must, T_QUERIES>
             || xecs::types::is_specialized_v< one_of, T_QUERIES>
             || xecs::types::is_specialized_v< none_of, T_QUERIES>
+            || xecs::types::is_specialized_v< optional, T_QUERIES>
             ) && ...)
         )
         void                    AddQueryFromTuple       ( std::tuple<T_QUERIES...>*

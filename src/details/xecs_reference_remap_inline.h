@@ -148,6 +148,25 @@ namespace xecs::persist::details
         }
         return nullptr;
     }
+
+    //-----------------------------------------------------------------------------------------
+    // User-authored tags (e.g. a game's "static" tag) are part of an entity's identity and must be
+    // saved, but they're invisible to getDataComponentInfos/getShareComponentInfos. Engine-managed
+    // tags are excluded: prefab::tag is re-added by LoadGroupMember itself, and
+    // share_as_data_exclusive_tag only ever lives on internal share-entities. Tags carry no data, so
+    // they appear in a file's ComponentTypes list but never get a data block.
+    //-----------------------------------------------------------------------------------------
+    inline void AppendPersistentTagInfos( const xecs::archetype::instance& Archetype, std::vector<const xecs::component::type::info*>& Out ) noexcept
+    {
+        const auto Start = Out.size();
+        Archetype.AppendTagComponentInfos(Out);
+        Out.erase( std::remove_if( Out.begin() + Start, Out.end(), []( const xecs::component::type::info* p ) noexcept
+        {
+            return xecs::component::type::IsComponentType<xecs::prefab::tag>(p)
+                || xecs::component::type::IsComponentType<xecs::component::share_as_data_exclusive_tag>(p);
+        }), Out.end() );
+    }
+
     //-----------------------------------------------------------------------------------------
     // LOAD, step 1 of 3 - called right after an entity file's own ComponentTypes list (Infos) has
     // been read, BEFORE the archetype/entity even exists: if Infos names xecs::editor::prefab_instance,
@@ -198,6 +217,7 @@ namespace xecs::persist::details
             RootInfos.reserve(DataSpan.size() + ShareSpan.size());
             for( auto p : DataSpan  ) RootInfos.push_back(p);
             for( auto p : ShareSpan ) RootInfos.push_back(p);
+            AppendPersistentTagInfos(RootArchetype, RootInfos);
         }
         for( auto pRootInfo : RootInfos )
         {
@@ -650,6 +670,7 @@ namespace xecs::persist::details
                     RootInfos.reserve(DataSpan.size() + ShareSpan.size());
                     for( auto p : DataSpan  ) RootInfos.push_back(p);
                     for( auto p : ShareSpan ) RootInfos.push_back(p);
+                    AppendPersistentTagInfos(RootArchetype, RootInfos);
                 }
                 for( auto pRootInfo : RootInfos )
                 {
@@ -685,6 +706,9 @@ namespace xecs::persist::details
         };
         for( auto pInfo : DataSpan  ) Consider(pInfo);
         for( auto pInfo : ShareSpan ) Consider(pInfo);
+        std::vector<const xecs::component::type::info*> TagInfos;
+        AppendPersistentTagInfos(Archetype, TagInfos);
+        for( auto pInfo : TagInfos  ) Consider(pInfo);
 
         if( auto It = std::find_if(OutInfosToWrite.begin(), OutInfosToWrite.end(), xecs::component::type::IsComponentType<xecs::editor::prefab_instance>); It != OutInfosToWrite.end() && It != OutInfosToWrite.begin() )
             std::iter_swap(OutInfosToWrite.begin(), It);

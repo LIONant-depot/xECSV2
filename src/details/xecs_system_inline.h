@@ -108,6 +108,77 @@ namespace xecs::system
 
     namespace type::details
     {
+        template< std::size_t N >
+        struct access_table
+        {
+            std::array<component_access, N> m_Entries {};
+            std::size_t                     m_Count   {};
+
+            constexpr void Add( const xecs::component::type::info& Info, match Match, access Access ) noexcept
+            {
+                for( std::size_t i = 0; i < m_Count; ++i )
+                {
+                    auto& E = m_Entries[i];
+                    if( E.m_ComponentGuid.m_Value != Info.m_Guid.m_Value ) continue;
+                    if( Match == match::MUST || (Match == match::ONE_OF && E.m_Match == match::IF_PRESENT) ) E.m_Match = Match;
+                    if( Access > E.m_Access ) E.m_Access = Access;
+                    return;
+                }
+                m_Entries[m_Count++] = component_access{ Info.m_Guid, Info.m_pName, Match, Access };
+            }
+        };
+
+        template< typename T_COMPONENT >
+        constexpr access access_of_v = std::is_const_v<std::remove_pointer_t<std::remove_reference_t<T_COMPONENT>>> ? access::READ : access::WRITE;
+
+        template< typename T_TABLE, template<typename...> class T_KIND, typename... T_COMPONENTS >
+        constexpr void AddQueryKind( T_TABLE& Table, T_KIND<T_COMPONENTS...>* ) noexcept
+        {
+            using kind = T_KIND<T_COMPONENTS...>;
+            constexpr match Match = std::is_same_v<kind, xecs::query::must<T_COMPONENTS...>>   ? match::MUST
+                                  : std::is_same_v<kind, xecs::query::one_of<T_COMPONENTS...>> ? match::ONE_OF
+                                  : std::is_same_v<kind, xecs::query::none_of<T_COMPONENTS...>>? match::NONE_OF
+                                  :                                                              match::IF_PRESENT;
+            ( Table.Add( xecs::component::type::info_v<T_COMPONENTS>, Match, Match == match::NONE_OF ? access::NONE : access_of_v<T_COMPONENTS> ), ... );
+        }
+
+        // Same mapping AddQueryFromFunction uses: reference = must, pointer = one_of.
+        template< typename T_TABLE, typename... T_ARGS >
+        constexpr void AddFunctionArgs( T_TABLE& Table, std::tuple<T_ARGS...>* ) noexcept
+        {
+            ( [&]
+            {
+                using base = std::remove_const_t<std::remove_pointer_t<std::remove_reference_t<T_ARGS>>>;
+                if constexpr ( false == std::is_same_v<base, xecs::component::entity> )
+                    Table.Add( xecs::component::type::info_v<base>, std::is_pointer_v<T_ARGS> ? match::ONE_OF : match::MUST, access_of_v<T_ARGS> );
+            }(), ... );
+        }
+
+        template< typename T_SYSTEM >
+        consteval auto BuildAccessTable( void ) noexcept
+        {
+            using query_t = typename T_SYSTEM::query;
+            constexpr std::size_t nQuery = []<typename... T_Q>( std::tuple<T_Q...>* ) consteval
+            {
+                return ( std::size_t{0} + ... + []<template<typename...> class K, typename... C>( K<C...>* ) consteval { return sizeof...(C); }( static_cast<T_Q*>(nullptr) ) );
+            }( xecs::types::null_tuple_v<query_t> );
+
+            constexpr std::size_t nArgs = []() consteval
+            {
+                if constexpr ( xecs::function::is_callable_v<T_SYSTEM> ) return std::tuple_size_v<typename xecs::function::traits<T_SYSTEM>::args_tuple>;
+                else                                                     return std::size_t{0};
+            }();
+
+            access_table< nQuery + nArgs > Table{};
+            []<typename... T_Q>( auto& Tbl, std::tuple<T_Q...>* ) constexpr { ( AddQueryKind( Tbl, static_cast<T_Q*>(nullptr) ), ... ); }( Table, xecs::types::null_tuple_v<query_t> );
+            if constexpr ( xecs::function::is_callable_v<T_SYSTEM> )
+                AddFunctionArgs( Table, xecs::types::null_tuple_v<typename xecs::function::traits<T_SYSTEM>::args_tuple> );
+            return Table;
+        }
+
+        template< typename T_SYSTEM >
+        inline constexpr auto access_table_v = BuildAccessTable<T_SYSTEM>();
+
         template< typename T_SYSTEM >
         consteval type::info CreateInfo( void ) noexcept
         {
@@ -162,6 +233,7 @@ namespace xecs::system
                                             }
             ,   .m_pName                = T_SYSTEM::typedef_v.m_pName
             ,   .m_ID                   = T_SYSTEM::typedef_v.id_v
+            ,   .m_Access               = { access_table_v<T_SYSTEM>.m_Entries.data(), access_table_v<T_SYSTEM>.m_Count }
             };
         }
     }

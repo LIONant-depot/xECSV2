@@ -300,6 +300,9 @@ namespace xecs::scene
                     continue;
                 }
 
+                // TAG: already in the archetype via ArchetypeInfos; SaveEntity writes no data block for it.
+                if( pInfo->m_TypeID == xecs::component::type::id::TAG ) continue;
+
                 // Anything else reaching here is either a plain entity's ordinary component, or a
                 // prefab instance's own "added only to this instance" component (no prefab default
                 // exists for it, so it's fully serialized exactly like an ordinary one) - same read
@@ -704,6 +707,7 @@ namespace xecs::scene
         AllComponentSpan.reserve(DataSpan.size() + ShareSpan.size());
         for( auto p : DataSpan  ) AllComponentSpan.push_back(p);
         for( auto p : ShareSpan ) AllComponentSpan.push_back(p);
+        xecs::persist::details::AppendPersistentTagInfos(Archetype, AllComponentSpan);
 
         std::printf("[SaveEntity] Id=%u Entity.m_Value=%llu DataSpan (%zu) ShareSpan (%zu):", Id, (unsigned long long)Entity.m_Value, DataSpan.size(), ShareSpan.size());
         for( auto pInfo : DataSpan  ) std::printf(" %s", pInfo->m_pName);
@@ -796,6 +800,9 @@ namespace xecs::scene
 
         for( auto pInfo : Infos )
         {
+            // TAG: listed in ComponentTypes above, but has no data to write.
+            if( pInfo->m_TypeID == xecs::component::type::id::TAG ) continue;
+
             // DATA: entity pool. SHARE: share-entity via family (never in the entity DATA pool).
             auto* pLive = xecs::persist::details::ResolveLiveComponentPointer( m_GameMgr, Entity, *pInfo );
             assert(pLive != nullptr);

@@ -536,6 +536,14 @@ namespace xecs::prefab
             if( InnerDetails.m_pPool->findIndexComponentFromInfo(*pInfo) >= 0 )          continue;   // the inner prefab already defines this - not an "extra"
             ExtraInfos.push_back(pInfo);
         }
+        {
+            // Tags have no pool slot, so "does the inner prefab define it" is an archetype-bits check.
+            std::vector<const xecs::component::type::info*> TagInfos;
+            xecs::persist::details::AppendPersistentTagInfos(*EDetails.m_pPool->m_pArchetype, TagInfos);
+            for( auto pInfo : TagInfos )
+                if( false == InnerDetails.m_pPool->m_pArchetype->getComponentBits().getBit(pInfo->m_BitID) )
+                    ExtraInfos.push_back(pInfo);
+        }
 
         // The other half of the same "place != load" gap: PI.m_ComponentDiffs' m_bAdded=false entries
         // record a component the inner prefab DEFINES that Entity deliberately REMOVED (the same
@@ -883,6 +891,7 @@ AddOrRemoveComponents
             AllComponentSpan.reserve(DataSpan.size() + ShareSpan.size());
             for( auto p : DataSpan  ) AllComponentSpan.push_back(p);
             for( auto p : ShareSpan ) AllComponentSpan.push_back(p);
+            xecs::persist::details::AppendPersistentTagInfos(Archetype, AllComponentSpan);
 
             std::vector<const xecs::component::type::info*> Infos;
             std::vector<std::uint64_t>                       PrefabOwnedGuids;
@@ -929,6 +938,9 @@ AddOrRemoveComponents
 
             for( auto pInfo : Infos )
             {
+                // TAG: listed in ComponentTypes above, but has no data to write.
+                if( pInfo->m_TypeID == xecs::component::type::id::TAG ) continue;
+
                 std::printf("[Prefab::SaveGroupMember DEBUG] Id=%u writing component '%s' ReferenceMode=%d\n", Id, pInfo->m_pName, (int)pInfo->m_ReferenceMode);
                 std::fflush(stdout);
                 auto* pLive = xecs::persist::details::ResolveLiveComponentPointer( GameMgr, Entity, *pInfo );
@@ -1101,6 +1113,9 @@ AddOrRemoveComponents
                     continue;
                 }
 
+                // TAG: already in the archetype via ArchetypeInfos; SaveGroupMember writes no data block for it.
+                if( pInfo->m_TypeID == xecs::component::type::id::TAG ) continue;
+
                 if( pInfo->m_TypeID == xecs::component::type::id::SHARE )
                 {
                     std::vector<std::byte> Scratch( pInfo->m_Size );
@@ -1189,6 +1204,7 @@ AddOrRemoveComponents
         }
         for( auto pInfo : ShareSpan )
             Infos.push_back(pInfo);
+        xecs::persist::details::AppendPersistentTagInfos(SourceArchetype, Infos);   // no data to copy - archetype bits only
 
         auto& NewArchetype = m_GameMgr.getOrCreateArchetype( { Infos.data(), Infos.size() } );
 
