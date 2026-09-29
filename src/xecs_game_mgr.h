@@ -223,6 +223,18 @@ namespace xecs::game_mgr
         > __inline
         T_SYSTEM&                           getSystem               ( void
                                                                     ) noexcept;
+        // One type-erased slot for whatever the embedding application (its own "my_game"-equivalent -
+        // xLION's xlevel::session, say) wants lower-level code (a system, a cross-module API function)
+        // to be able to reach back up to - delta time, a fixed-timestep accumulator, an active-system
+        // pointer, whatever doesn't belong in this generic, reusable ECS core itself. Same idiom as
+        // GLFW's window userdata / Lua's lua_State userdata: the caller owns type safety, this just
+        // holds and hands back a pointer. One slot, not a registry - a second unrelated consumer
+        // needing this too is the signal to revisit, not something to design against speculatively.
+        void                                 setUserData             ( void* pUserData
+                                                                    ) noexcept { m_pUserData = pUserData; }
+        template< typename T >
+        [[nodiscard]] T*                     getUserData             ( void
+                                                                    ) const noexcept { return static_cast<T*>(m_pUserData); }
         // The live, actively-tested persistence path for a raw ECS game state (used by
         // dependencies/xECSV2/smoke_test.cpp's own save+load round trip) - distinct from the
         // resource-pipeline-integrated Scene/Level/Prefab persistence (xecs_scene_inline.h/
@@ -243,5 +255,6 @@ namespace xecs::game_mgr
         xecs::level::mgr                                    m_LevelMgr          {*this};
         bool                                                m_isRunning         = false;
         xecs::log::channel                                  m_LogChannel        { "xecs" };
+        void*                                                m_pUserData         = nullptr;
     };
 }
