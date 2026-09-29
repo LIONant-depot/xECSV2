@@ -130,6 +130,8 @@ namespace xecs::system
         std::unordered_map<type::guid, xecs::system::instance*> m_SystemMaps;
         system_list                                             m_UpdaterSystems;
         system_list                                             m_NotifierSystems;
+        system_list                                             m_BuilderSystems;
+        std::uint32_t                                           m_BuilderSystemsVersion = 0;    // Bumped on every builder registration - invalidates cached build plans
         events                                                  m_Events;
         std::wstring                                            m_ProjectPath;
         std::vector<update_system_row>                          m_PreRunSnapshot;

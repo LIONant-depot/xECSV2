@@ -1093,63 +1093,27 @@ AddOrRemoveComponents
 
             auto& Archetype = GameMgr.getOrCreateArchetype( { ArchetypeInfos.data(), ArchetypeInfos.size() } );
 
-            // Default-construct into the default share family. CreateEntity(Infos, MoveData)
-            // cannot accept SHARE entries (assert MoveData.size()==1 when m_nShareComponents>0;
-            // SHARE bytes are not in the entity DATA pool). DATA filled below; SHARE re-interned.
-            auto NewEntity = Archetype.CreateEntity();
+            // Same staging as Scene::LoadEntity: fill everything first, create once in the final family.
+            xecs::persist::details::staged_components Staged( ArchetypeInfos );
 
             if( bIsPrefabInstance )
-                xecs::persist::details::CopyPrefabInstanceDefaults( GameMgr, PrefabRootEntity, NewEntity, ArchetypeInfos );
+                Staged.CopyFrom( GameMgr, PrefabRootEntity );
 
             for( auto pInfo : Infos )
             {
-                // Re-resolve every iteration - SHARE reintern / prefab-default reintern may MoveIn.
-                auto& EDetails = GameMgr.m_ComponentMgr.getEntityDetails(NewEntity);
-                auto& Pool     = *EDetails.m_pPool;
-
                 if( xecs::component::type::IsComponentType<xecs::editor::prefab_instance>(pInfo) )
                 {
-                    Pool.getComponent<xecs::editor::prefab_instance>(EDetails.m_PoolIndex) = std::move(TempPI);
+                    *Staged.find<xecs::editor::prefab_instance>() = std::move(TempPI);
                     continue;
                 }
 
                 // TAG: already in the archetype via ArchetypeInfos; SaveGroupMember writes no data block for it.
                 if( pInfo->m_TypeID == xecs::component::type::id::TAG ) continue;
 
-                if( pInfo->m_TypeID == xecs::component::type::id::SHARE )
-                {
-                    std::vector<std::byte> Scratch( pInfo->m_Size );
-                    if( pInfo->m_pConstructFn ) pInfo->m_pConstructFn( Scratch.data() );
-                    if( auto Err = xecs::persist::details::SerializeOneComponent(TextFile, true, *pInfo, Scratch.data()); Err )
-                    {
-                        std::printf("[Prefab::LoadGroupMember] FileId=%u : share component '%s' failed to read (%s)\n", FileId, pInfo->m_pName, std::string(Err.getMessage()).c_str());
-                        std::fflush(stdout);
-                        if( pInfo->m_pDestructFn ) pInfo->m_pDestructFn( Scratch.data() );
-                        auto E = NewEntity;
-                        GameMgr.DeleteEntity(E);
-                        return Err;
-                    }
-                    if( false == GameMgr.ReinternShareComponent( NewEntity, *pInfo, Scratch.data() ) )
-                    {
-                        if( pInfo->m_pDestructFn ) pInfo->m_pDestructFn( Scratch.data() );
-                        auto E = NewEntity;
-                        GameMgr.DeleteEntity(E);
-                        return xerr::create<xecs::game_mgr::state::FAILURE, "Prefab group member failed to re-intern a share component on load">();
-                    }
-                    if( pInfo->m_pDestructFn ) pInfo->m_pDestructFn( Scratch.data() );
-                    continue;
-                }
-
-                const auto iType = Pool.findIndexComponentFromInfo(*pInfo);
-                assert(iType >= 0);
-                auto pData = &Pool.m_pComponent[iType][ EDetails.m_PoolIndex.m_Value * pInfo->m_Size ];
-
-                if( auto Err = xecs::persist::details::SerializeOneComponent(TextFile, true, *pInfo, pData); Err )
+                if( auto Err = xecs::persist::details::SerializeOneComponent(TextFile, true, *pInfo, Staged.find(*pInfo)); Err )
                 {
                     std::printf("[Prefab::LoadGroupMember] FileId=%u : component '%s' failed to read (%s)\n", FileId, pInfo->m_pName, std::string(Err.getMessage()).c_str());
                     std::fflush(stdout);
-                    auto E = NewEntity;
-                    GameMgr.DeleteEntity(E);
                     return Err;
                 }
             }
@@ -1162,10 +1126,9 @@ AddOrRemoveComponents
             // loaded AND the group-wide remap pass has run.
 
             if( bIsRoot )
-            {
-                auto& EDetails = GameMgr.m_ComponentMgr.getEntityDetails(NewEntity);
-                EDetails.m_pPool->getComponent<xecs::prefab::root>(EDetails.m_PoolIndex).m_Guid = PrefabGuid;
-            }
+                Staged.find<xecs::prefab::root>()->m_Guid = PrefabGuid;
+
+            const auto NewEntity = Staged.Create(Archetype);
 
             Group.m_LocalToRuntime[FileId]            = NewEntity;
             Group.m_RuntimeToLocal[NewEntity.m_Value]  = FileId;
@@ -1208,58 +1171,19 @@ AddOrRemoveComponents
 
         auto& NewArchetype = m_GameMgr.getOrCreateArchetype( { Infos.data(), Infos.size() } );
 
-        // Default-construct into the default share family. CreateEntity(Infos, MoveData) can accept
-        // multi-SHARE now, but cloning still wants Source's live SHARE values (not defaults) - create
-        // empty then reintern below, matching Scene::LoadEntity / LoadGroupMember.
-        auto NewEntity = NewArchetype.CreateEntity();
-
-        auto& NewDetails = m_GameMgr.m_ComponentMgr.getEntityDetails(NewEntity);
-        auto& NewPool    = *NewDetails.m_pPool;
+        // Created once, directly with Source's live DATA + SHARE values. parent/children are
+        // structural (rebuilt below). prefab::root is new here - Source never has it, so it stays
+        // default. editor::prefab_instance, if present, copies plain like any other DATA component.
+        xecs::persist::details::staged_components Staged( Infos );
+        Staged.CopyFrom( m_GameMgr, Source, { &xecs::component::type::info_v<xecs::component::parent>
+                                            , &xecs::component::type::info_v<xecs::component::children> } );
+        auto NewEntity = Staged.Create(NewArchetype);
 
         // Mint and register BEFORE recursing into children below - a later reference-remap pass or
         // diagnostic walk touching the group mid-clone needs this entity's id to already exist.
         const auto Id = details::NextFreeLocalId(Group);
         Group.m_LocalToRuntime[Id]                = NewEntity;
         Group.m_RuntimeToLocal[NewEntity.m_Value] = Id;
-
-        // Copy each of SOURCE's own live DATA values across (iterating DataSpan - Source's own
-        // component list - not the NEW archetype's list, which for the root member also includes
-        // xecs::prefab::root; Source, a live plain scene entity, never has that component itself).
-        // parent/children are structural (rebuilt below). SHARE is re-interned after this loop.
-        // editor::prefab_instance, if present, copies plain like any other DATA component.
-        for( auto pInfo : DataSpan )
-        {
-            if( xecs::component::type::IsComponentType<xecs::component::entity>(pInfo) )   continue;
-            if( xecs::component::type::IsComponentType<xecs::component::parent>(pInfo) )   continue;
-            if( xecs::component::type::IsComponentType<xecs::component::children>(pInfo) ) continue;
-
-            // Re-resolve - not expected to MoveIn during DATA copy, but keep consistent with load.
-            auto& DstDetails = m_GameMgr.m_ComponentMgr.getEntityDetails(NewEntity);
-            auto& DstPool    = *DstDetails.m_pPool;
-
-            const auto iSrcType = SourceDetails.m_pPool->findIndexComponentFromInfo(*pInfo);
-            const auto iDstType = DstPool.findIndexComponentFromInfo(*pInfo);
-            assert(iSrcType >= 0 && iDstType >= 0);
-
-            auto pSrc = &SourceDetails.m_pPool->m_pComponent[iSrcType][ SourceDetails.m_PoolIndex.m_Value * pInfo->m_Size ];
-            auto pDst = &DstPool.m_pComponent[iDstType][ DstDetails.m_PoolIndex.m_Value * pInfo->m_Size ];
-
-            if( pInfo->m_pCopyFn ) pInfo->m_pCopyFn(pDst, pSrc);
-            else                   std::memcpy(pDst, pSrc, pInfo->m_Size);
-        }
-
-        // SHARE: copy Source's live share-entity values into NewEntity's family (reintern).
-        for( auto pInfo : ShareSpan )
-        {
-            auto* pSrc = xecs::persist::details::ResolveLiveComponentPointer( m_GameMgr, Source, *pInfo );
-            if( pSrc == nullptr ) continue;
-            std::vector<std::byte> Scratch( pInfo->m_Size );
-            if( pInfo->m_pConstructFn ) pInfo->m_pConstructFn( Scratch.data() );
-            if( pInfo->m_pCopyFn ) pInfo->m_pCopyFn( Scratch.data(), pSrc );
-            else                   std::memcpy( Scratch.data(), pSrc, pInfo->m_Size );
-            m_GameMgr.ReinternShareComponent( NewEntity, *pInfo, Scratch.data() );
-            if( pInfo->m_pDestructFn ) pInfo->m_pDestructFn( Scratch.data() );
-        }
 
         // root.m_Guid is stamped by CreatePrefabFromEntity right after this call returns (the only
         // caller of a bIsRoot=true clone, and already knows PrefabGuid) - avoids threading an extra

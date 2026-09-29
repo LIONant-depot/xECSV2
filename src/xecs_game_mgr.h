@@ -235,6 +235,24 @@ namespace xecs::game_mgr
         template< typename T >
         [[nodiscard]] T*                     getUserData             ( void
                                                                     ) const noexcept { return static_cast<T*>(m_pUserData); }
+
+        // Builder components/systems - see doc/xecs_builder_components.md. Off by default: a world
+        // that authors builder components (the editor, while editing) keeps them as ordinary
+        // components; a world that runs them (the game, or Play in the editor) turns this on.
+        struct build_plan
+        {
+            archetype::instance*                                                    m_pFinalArchetype = nullptr;    // Input components minus the builder ones
+            std::vector<const component::type::info*>                               m_BuilderInfos;                 // Consumed at creation, never placed
+            std::vector<std::pair<const system::type::info*, system::instance*>>   m_Builders;                     // Builder systems whose query matches the input
+        };
+        void                                 EnableBuilders          ( bool bEnable
+                                                                    ) noexcept { m_bBuildersEnabled = bEnable; m_BuildPlans.clear(); }
+        [[nodiscard]] bool                   areBuildersEnabled      ( void
+                                                                    ) const noexcept { return m_bBuildersEnabled; }
+        // Cached per input component set. Prefab entities (prefab::tag) are templates and never built.
+        inline
+        const build_plan&                    getBuildPlan            ( std::span<const component::type::info* const> Infos
+                                                                    ) noexcept;
         // The live, actively-tested persistence path for a raw ECS game state (used by
         // dependencies/xECSV2/smoke_test.cpp's own save+load round trip) - distinct from the
         // resource-pipeline-integrated Scene/Level/Prefab persistence (xecs_scene_inline.h/
@@ -256,5 +274,8 @@ namespace xecs::game_mgr
         bool                                                m_isRunning         = false;
         xecs::log::channel                                  m_LogChannel        { "xecs" };
         void*                                                m_pUserData         = nullptr;
+        bool                                                 m_bBuildersEnabled  = false;
+        std::unordered_map<std::uint64_t, build_plan>        m_BuildPlans        {};
+        std::uint32_t                                        m_BuildPlansVersion = 0;       // m_SystemMgr.m_BuilderSystemsVersion the cache was built against
     };
 }

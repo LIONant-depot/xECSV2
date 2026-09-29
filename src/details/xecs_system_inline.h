@@ -142,7 +142,7 @@ namespace xecs::system
             ( Table.Add( xecs::component::type::info_v<T_COMPONENTS>, Match, Match == match::NONE_OF ? access::NONE : access_of_v<T_COMPONENTS> ), ... );
         }
 
-        // Same mapping AddQueryFromFunction uses: reference = must, pointer = one_of.
+        // Same mapping AddQueryFromFunction uses: reference = must, pointer = optional.
         template< typename T_TABLE, typename... T_ARGS >
         constexpr void AddFunctionArgs( T_TABLE& Table, std::tuple<T_ARGS...>* ) noexcept
         {
@@ -150,7 +150,7 @@ namespace xecs::system
             {
                 using base = std::remove_const_t<std::remove_pointer_t<std::remove_reference_t<T_ARGS>>>;
                 if constexpr ( false == std::is_same_v<base, xecs::component::entity> )
-                    Table.Add( xecs::component::type::info_v<base>, std::is_pointer_v<T_ARGS> ? match::ONE_OF : match::MUST, access_of_v<T_ARGS> );
+                    Table.Add( xecs::component::type::info_v<base>, std::is_pointer_v<T_ARGS> ? match::IF_PRESENT : match::MUST, access_of_v<T_ARGS> );
             }(), ... );
         }
 
@@ -231,6 +231,30 @@ namespace xecs::system
                                             {
                                                 std::destroy_at(&static_cast< xecs::system::details::compleated<T_SYSTEM>& >(This));
                                             }
+            ,   .m_BuildFunction        = []() consteval noexcept -> type::info::build_fn*
+                                            {
+                                                if constexpr (T_SYSTEM::typedef_v.id_v != type::id::BUILDER) return nullptr;
+                                                else return []( xecs::system::instance& This, type::info::resolve_fn* pResolve, const void* pContext ) noexcept
+                                                {
+                                                    using real_system   = xecs::system::details::compleated<T_SYSTEM>;
+                                                    using function_args = typename xecs::function::traits<real_system>::args_tuple;
+
+                                                    std::array< std::byte*, std::tuple_size_v<function_args> > Pointers;
+                                                    [&]<typename... T_ARGS>( std::tuple<T_ARGS...>* ) noexcept
+                                                    {
+                                                        ( [&]
+                                                        {
+                                                            using arg  = std::remove_pointer_t<std::remove_reference_t<T_ARGS>>;
+                                                            using base = std::remove_const_t<arg>;
+                                                            static_assert( !xecs::component::type::info_v<base>.m_bBuilder || std::is_const_v<arg>
+                                                                         , "A builder system may only read builder components (take them as const)" );
+                                                            Pointers[ xecs::types::tuple_t2i_v<T_ARGS, function_args> ] = pResolve( pContext, xecs::component::type::info_v<base> );
+                                                        }(), ... );
+                                                    }( xecs::types::null_tuple_v<function_args> );
+
+                                                    xecs::archetype::details::CallFunction( static_cast<real_system&>(This), Pointers );
+                                                };
+                                            }()
             ,   .m_pName                = T_SYSTEM::typedef_v.m_pName
             ,   .m_ID                   = T_SYSTEM::typedef_v.id_v
             ,   .m_Access               = { access_table_v<T_SYSTEM>.m_Entries.data(), access_table_v<T_SYSTEM>.m_Count }

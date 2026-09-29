@@ -691,11 +691,13 @@ instance::_CreateEntity
     }
 
     //--------------------------------------------------------------------------------------------
+    template< typename T_CALLBACK >
     xecs::component::entity
 instance::CreateEntity
     ( xecs::pool::family&                                   PoolFamily
     , std::span< const xecs::component::type::info* const>  Infos
     , std::span< std::byte* >                               MoveData
+    , T_CALLBACK&&                                          OnCreated
     ) noexcept
     {
         assert( xecs::tools::HaveAllComponents(m_ComponentBits, Infos) );
@@ -727,6 +729,8 @@ instance::CreateEntity
             }
 
             TheEntity = Entity;
+
+            if constexpr (false == std::is_same_v<xecs::tools::empty_lambda, std::decay_t<T_CALLBACK>>) OnCreated(Entity);
         });
 
         return TheEntity;
@@ -734,9 +738,11 @@ instance::CreateEntity
 
     //--------------------------------------------------------------------------------------------
 
+    template< typename T_CALLBACK >
     xecs::component::entity instance::CreateEntity
     ( std::span< const xecs::component::type::info* const>  Infos
     , std::span< std::byte* >                               MoveData
+    , T_CALLBACK&&                                          OnCreated
     ) noexcept
     {
         // MoveData contract (DATA + SHARE mixed):
@@ -793,6 +799,7 @@ instance::CreateEntity
         ( Family
         , std::span{ DataInfos.data(), DataInfos.size() }
         , std::span{ DataMove.data(),  DataMove.size() }
+        , std::forward<T_CALLBACK>(OnCreated)
         );
     }
 

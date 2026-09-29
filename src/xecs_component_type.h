@@ -41,6 +41,7 @@ namespace xecs::component::type
         const char*             m_pName              {"Unnamed data component"};
         serialize_mode          m_SerializeMode      { serialize_mode::AUTO };
         reference_mode          m_ReferenceMode      { reference_mode::AUTO };
+        bool                    m_bBuilder           { false };                          // Only exists while the entity is being created - see doc/xecs_builder_components.md
     };
 
     struct tag
@@ -51,6 +52,7 @@ namespace xecs::component::type
 
         guid                    m_Guid              {};
         const char*             m_pName             { "Unnamed tag component" };
+        bool                    m_bBuilder          { false };                           // See data::m_bBuilder
     };
 
     struct exclusive_tag
@@ -82,6 +84,7 @@ namespace xecs::component::type
         bool                    m_bBuildFilter       { false };                          // Tells xECS to automatically create a reference to all its references "a filter". So if we want to find all entities that have a share of a particular value we can do it quickly.
         serialize_mode          m_SerializeMode      { serialize_mode::AUTO };
         reference_mode          m_ReferenceMode      { reference_mode::AUTO };
+        bool                    m_bBuilder           { false };                          // See data::m_bBuilder
     };
 
     namespace details
@@ -172,7 +175,8 @@ namespace xecs::component::type
         const type::id              m_TypeID;               // Simple enumeration that tells what type of component is this
         const bool                  m_bGlobalScoped:1       // If the component is a share, it indicates if it should be factor to a globally scope or to an archetype scope
         ,                           m_bBuildShareFilter:1   // If the component is a share, it indicates if the query can filter by its key
-        ,                           m_bExclusiveTag:1;      // If the component is a tag, is it a exclusive tag
+        ,                           m_bExclusiveTag:1       // If the component is a tag, is it a exclusive tag
+        ,                           m_bBuilder:1;           // Consumed by builder systems at creation, never placed in the final archetype
         construct_fn* const         m_pConstructFn;         // Constructor function pointer if required
         destruct_fn* const          m_pDestructFn;          // Destructor function pointer if required
         move_fn* const              m_pMoveFn;              // Move function pointer if required

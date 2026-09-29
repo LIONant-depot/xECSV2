@@ -28,9 +28,10 @@ namespace xecs::query
         bool                    Compare                 ( const tools::bits& ArchetypeBits
                                                         , const tools::bits& ExclutiveTagBits
                                                         ) const noexcept;
+        // Reference parameters are must; pointer parameters are optional (no effect on matching).
         template
         < typename T_FUNCTION
-        > 
+        >
         void                    AddQueryFromFunction    ( void
                                                         ) noexcept;
         template

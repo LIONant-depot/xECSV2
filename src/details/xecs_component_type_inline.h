@@ -397,6 +397,7 @@ namespace xecs::component::type::details
         ,   .m_bGlobalScoped        = []{ if constexpr (T_COMPONENT::typedef_v.id_v == type::id::SHARE) return T_COMPONENT::typedef_v.m_bGlobalScoped; else return false; }()
         ,   .m_bBuildShareFilter    = []{ if constexpr (T_COMPONENT::typedef_v.id_v == type::id::SHARE) return T_COMPONENT::typedef_v.m_bBuildFilter;  else return false; }()
         ,   .m_bExclusiveTag        = []{ if constexpr (T_COMPONENT::typedef_v.id_v == type::id::TAG)   return T_COMPONENT::typedef_v.exclusive_v;     else return false; }()
+        ,   .m_bBuilder             = []{ if constexpr (requires { T_COMPONENT::typedef_v.m_bBuilder; }) return T_COMPONENT::typedef_v.m_bBuilder; else return false; }()
         ,   .m_pConstructFn         = std::is_trivially_constructible_v<T_COMPONENT>
                                         ? nullptr
                                         : []( std::byte* p ) noexcept

@@ -115,6 +115,65 @@ namespace xecs::game_mgr
     }
 
     //---------------------------------------------------------------------------
+
+    const instance::build_plan& instance::getBuildPlan( std::span<const component::type::info* const> Infos ) noexcept
+    {
+        if( m_BuildPlansVersion != m_SystemMgr.m_BuilderSystemsVersion )
+        {
+            m_BuildPlans.clear();
+            m_BuildPlansVersion = m_SystemMgr.m_BuilderSystemsVersion;
+        }
+
+        xecs::tools::bits Bits{};
+        for( auto p : Infos ) Bits.setBit(p->m_BitID);
+        Bits.setBit(xecs::component::type::info_v<xecs::component::entity>.m_BitID);
+
+        const auto Key = Bits.GenerateUniqueID();
+        if( auto It = m_BuildPlans.find(Key); It != m_BuildPlans.end() ) return It->second;
+
+        auto& Plan = m_BuildPlans[Key];
+
+        const bool bBuild = m_bBuildersEnabled
+                         && std::none_of( Infos.begin(), Infos.end(), xecs::component::type::IsComponentType<xecs::prefab::tag> );
+
+        std::vector<const component::type::info*> FinalInfos;
+        FinalInfos.reserve(Infos.size());
+        for( auto p : Infos )
+        {
+            if( bBuild && p->m_bBuilder ) Plan.m_BuilderInfos.push_back(p);
+            else                          FinalInfos.push_back(p);
+        }
+
+        if( false == Plan.m_BuilderInfos.empty() )
+        {
+            for( auto& [pSystemInfo, pSystem] : m_SystemMgr.m_BuilderSystems )
+                if( pSystemInfo->m_Query.Compare(Bits) ) Plan.m_Builders.push_back({ pSystemInfo, pSystem.get() });
+
+            // A builder component no builder system reads would be discarded with its data going
+            // nowhere - almost always an authoring mistake (missing system, wrong query).
+            for( auto pBuilderInfo : Plan.m_BuilderInfos )
+            {
+                const bool bConsumed = std::any_of( Plan.m_Builders.begin(), Plan.m_Builders.end(), [&]( auto& Builder ) noexcept
+                {
+                    return std::any_of( Builder.first->m_Access.begin(), Builder.first->m_Access.end(), [&]( auto& Access ) noexcept
+                    {
+                        return Access.m_ComponentGuid == pBuilderInfo->m_Guid && Access.m_Match != xecs::system::type::match::NONE_OF;
+                    });
+                });
+
+                if( false == bConsumed )
+                {
+                    std::printf("[xECS Builder] ERROR: builder component '%s' has no builder system consuming it - it will be discarded at creation\n", pBuilderInfo->m_pName);
+                    std::fflush(stdout);
+                }
+            }
+        }
+
+        Plan.m_pFinalArchetype = &getOrCreateArchetype( std::span{ FinalInfos.data(), FinalInfos.size() } );
+        return Plan;
+    }
+
+    //---------------------------------------------------------------------------
     inline
     archetype::instance* instance::findArchetype( xecs::archetype::guid ArchetypeGuid ) const noexcept
     {

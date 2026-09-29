@@ -82,14 +82,22 @@ namespace xecs::archetype
         inline
         xecs::pool::family&     getOrCreatePoolFamily   ( xecs::pool::family&                                   OtherArchetypeFamily
                                                         ) noexcept;
-        __inline
+        // OnCreated( xecs::component::entity ) runs once the data has been moved in, before
+        // m_OnEntityCreated notifies anyone (builder systems run there).
+        template
+        < typename T_CALLBACK = xecs::tools::empty_lambda
+        > __inline
         xecs::component::entity CreateEntity            ( xecs::pool::family&                                   PoolFamily
                                                         , std::span< const xecs::component::type::info* const>  Infos
                                                         , std::span< std::byte* >                               MoveData
+                                                        , T_CALLBACK&&                                          OnCreated = xecs::tools::empty_lambda{}
                                                         ) noexcept;
-        __inline
+        template
+        < typename T_CALLBACK = xecs::tools::empty_lambda
+        > __inline
         xecs::component::entity CreateEntity            ( std::span< const xecs::component::type::info* const>  Infos
                                                         , std::span< std::byte* >                               MoveData
+                                                        , T_CALLBACK&&                                          OnCreated = xecs::tools::empty_lambda{}
                                                         ) noexcept;
         template
         < typename T_CALLBACK = xecs::tools::empty_lambda

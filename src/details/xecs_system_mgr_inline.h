@@ -21,6 +21,14 @@ namespace xecs::system
             m_NotifierSystems.pop_back();
         }
 
+        while (m_BuilderSystems.size())
+        {
+            auto p = m_BuilderSystems.back().second.release();
+            m_BuilderSystems.back().first->m_DestroyFunction(*p);
+            delete reinterpret_cast<void*>(p);
+            m_BuilderSystems.pop_back();
+        }
+
     }
 
     //-------------------------------------------------------------------------------------------
@@ -47,6 +55,12 @@ namespace xecs::system
             {
                 m_NotifierSystems.push_back({ &type::info_v<T_SYSTEM>, std::make_unique< real_system >(GameMgr) });
                 return m_NotifierSystems.back().second.get();
+            }
+            else if constexpr( real_system::typedef_v.id_v == type::id::BUILDER )
+            {
+                m_BuilderSystems.push_back({ &type::info_v<T_SYSTEM>, std::make_unique< real_system >(GameMgr) });
+                ++m_BuilderSystemsVersion;
+                return m_BuilderSystems.back().second.get();
             }
             else
             {
@@ -79,6 +93,24 @@ namespace xecs::system
                 Q.AddQueryFromFunction<T_SYSTEM>();
             }
             type::info_v<T_SYSTEM>.m_Query = Q;
+        }
+
+        //
+        // Builder components never exist on built entities - a (non-builder) system that requires one
+        // silently matches nothing once builders are on (doc/xecs_builder_components.md).
+        //
+        if constexpr (real_system::typedef_v.id_v != type::id::BUILDER)
+        {
+            for( auto& Access : type::info_v<T_SYSTEM>.m_Access )
+            {
+                if( Access.m_Match != type::match::MUST && Access.m_Match != type::match::ONE_OF ) continue;
+                auto* pInfo = xecs::component::mgr::findComponentTypeInfo( Access.m_ComponentGuid );
+                if( pInfo == nullptr || pInfo->m_bBuilder == false ) continue;
+
+                std::printf("[xECS Builder] WARNING: system '%s' requires builder component '%s' - built entities never have it, so this system won't match them\n"
+                    , type::info_v<T_SYSTEM>.m_pName, pInfo->m_pName );
+                std::fflush(stdout);
+            }
         }
 
         //

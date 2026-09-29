@@ -150,6 +150,123 @@ namespace xecs::persist::details
     }
 
     //-----------------------------------------------------------------------------------------
+    // An entity's DATA + SHARE components gathered off-pool, so the entity can be created once,
+    // directly in its final share family. Creating it first and re-interning each share value
+    // afterwards moved the whole entity to a new family once per share component.
+    //-----------------------------------------------------------------------------------------
+    class staged_components
+    {
+    public:
+
+        explicit staged_components( std::span<const xecs::component::type::info* const> ArchetypeInfos ) noexcept
+        {
+            std::size_t Total = 0;
+            for( auto pInfo : ArchetypeInfos )
+            {
+                if( pInfo->m_TypeID == xecs::component::type::id::TAG ) continue;
+                if( xecs::component::type::IsComponentType<xecs::component::entity>(pInfo) ) continue;
+                m_Infos.push_back(pInfo);
+                m_Data.push_back( reinterpret_cast<std::byte*>(Total) );
+                Total += (pInfo->m_Size + (alignment_v - 1)) & ~(alignment_v - 1);
+            }
+
+            m_Buffer = std::make_unique<std::byte[]>(Total);
+            for( std::size_t i = 0; i < m_Infos.size(); ++i )
+            {
+                m_Data[i] = m_Buffer.get() + reinterpret_cast<std::size_t>(m_Data[i]);
+                if( m_Infos[i]->m_pConstructFn ) m_Infos[i]->m_pConstructFn( m_Data[i] );
+            }
+        }
+
+        ~staged_components() noexcept
+        {
+            for( std::size_t i = 0; i < m_Infos.size(); ++i )
+                if( m_Infos[i]->m_pDestructFn ) m_Infos[i]->m_pDestructFn( m_Data[i] );
+        }
+
+        staged_components( const staged_components& ) = delete;
+        staged_components& operator=( const staged_components& ) = delete;
+
+        std::byte* find( const xecs::component::type::info& Info ) const noexcept
+        {
+            for( std::size_t i = 0; i < m_Infos.size(); ++i )
+                if( m_Infos[i]->m_Guid == Info.m_Guid ) return m_Data[i];
+            return nullptr;
+        }
+
+        template< typename T >
+        T* find( void ) const noexcept
+        {
+            return reinterpret_cast<T*>( find( xecs::component::type::info_v<T> ) );
+        }
+
+        // Copies every staged component Source also has (DATA or SHARE), except the Skip types.
+        void CopyFrom( xecs::game_mgr::instance& GameMgr, xecs::component::entity Source, std::initializer_list<const xecs::component::type::info*> Skip = {} ) noexcept
+        {
+            for( std::size_t i = 0; i < m_Infos.size(); ++i )
+            {
+                auto& Info = *m_Infos[i];
+                if( std::any_of( Skip.begin(), Skip.end(), [&]( const xecs::component::type::info* p ) noexcept { return p->m_Guid == Info.m_Guid; } ) ) continue;
+
+                const auto* pSrc = ResolveLiveComponentPointer( GameMgr, Source, Info );
+                if( pSrc == nullptr ) continue;
+
+                if( Info.m_pCopyFn ) Info.m_pCopyFn( m_Data[i], pSrc );
+                else                 std::memcpy( m_Data[i], pSrc, Info.m_Size );
+            }
+        }
+
+        xecs::component::entity Create( xecs::archetype::instance& Archetype ) noexcept
+        {
+            return Archetype.CreateEntity( std::span{ m_Infos.data(), m_Infos.size() }, std::span{ m_Data.data(), m_Data.size() } );
+        }
+
+        // Places the entity once in Plan's final archetype (builder components stay here) and runs
+        // Plan's builder systems on it before anyone is notified of the new entity.
+        xecs::component::entity Create( xecs::game_mgr::instance& GameMgr, const xecs::game_mgr::instance::build_plan& Plan ) noexcept
+        {
+            if( Plan.m_BuilderInfos.empty() ) return Create( *Plan.m_pFinalArchetype );
+
+            std::vector<const xecs::component::type::info*> Infos;
+            std::vector<std::byte*>                         Data;
+            for( std::size_t i = 0; i < m_Infos.size(); ++i )
+            {
+                if( m_Infos[i]->m_bBuilder ) continue;
+                Infos.push_back( m_Infos[i] );
+                Data.push_back( m_Data[i] );
+            }
+
+            return Plan.m_pFinalArchetype->CreateEntity( std::span{ Infos.data(), Infos.size() }, std::span{ Data.data(), Data.size() }, [&]( xecs::component::entity Entity ) noexcept
+            {
+                struct context
+                {
+                    const staged_components&    m_Staged;
+                    xecs::game_mgr::instance&   m_GameMgr;
+                    xecs::component::entity     m_Entity;
+                } Context{ *this, GameMgr, Entity };
+
+                for( auto& [pInfo, pSystem] : Plan.m_Builders )
+                {
+                    pInfo->m_BuildFunction( *pSystem, []( const void* pContext, const xecs::component::type::info& Info ) noexcept -> std::byte*
+                    {
+                        auto& C = *static_cast<const context*>(pContext);
+                        return Info.m_bBuilder ? C.m_Staged.find(Info) : ResolveLiveComponentPointer( C.m_GameMgr, C.m_Entity, Info );
+                    }, &Context );
+                }
+            });
+        }
+
+    private:
+
+        // Matches operator new's own guarantee for the buffer start, so every slot keeps it.
+        static constexpr std::size_t alignment_v = __STDCPP_DEFAULT_NEW_ALIGNMENT__;
+
+        std::vector<const xecs::component::type::info*> m_Infos;
+        std::vector<std::byte*>                         m_Data;
+        std::unique_ptr<std::byte[]>                    m_Buffer;
+    };
+
+    //-----------------------------------------------------------------------------------------
     // User-authored tags (e.g. a game's "static" tag) are part of an entity's identity and must be
     // saved, but they're invisible to getDataComponentInfos/getShareComponentInfos. Engine-managed
     // tags are excluded: prefab::tag is re-added by LoadGroupMember itself, and
@@ -258,56 +375,6 @@ namespace xecs::persist::details
     }
 
     //-----------------------------------------------------------------------------------------
-    // LOAD, step 2 of 3 - called right after NewEntity's archetype/pool memory exists, BEFORE any
-    // per-component file read: every component the prefab itself owns starts out as a copy of the
-    // prefab's CURRENT value, always - even one about to be read from the file too (a per-property
-    // override's file record never re-states a whole component's data, only the overridden
-    // properties, so whatever this entity did NOT override needs to already hold the prefab's value
-    // before the file read runs).
-    //-----------------------------------------------------------------------------------------
-    inline void CopyPrefabInstanceDefaults
-    ( xecs::game_mgr::instance& GameMgr
-    , xecs::component::entity PrefabRootEntity
-    , xecs::component::entity NewEntity
-    , std::span<const xecs::component::type::info* const> ArchetypeInfos
-    ) noexcept
-    {
-        auto& RootDetails = GameMgr.m_ComponentMgr.getEntityDetails(PrefabRootEntity);
-        auto& NewDetails  = GameMgr.m_ComponentMgr.getEntityDetails(NewEntity);
-        auto& Pool        = *NewDetails.m_pPool;
-
-        for( auto pInfo : ArchetypeInfos )
-        {
-            if( xecs::component::type::IsComponentType<xecs::component::entity>(pInfo) ) continue;
-
-            // SHARE lives on the family share-entity, not in either DATA pool - reintern
-            // NewEntity into the prefab root's share value (same copy-on-write path the
-            // editor uses when editing a share property).
-            if( pInfo->m_TypeID == xecs::component::type::id::SHARE )
-            {
-                auto* pSrc = ResolveLiveComponentPointer(GameMgr, PrefabRootEntity, *pInfo);
-                if( pSrc == nullptr ) continue;
-                std::vector<std::byte> Scratch( pInfo->m_Size );
-                if( pInfo->m_pConstructFn ) pInfo->m_pConstructFn( Scratch.data() );
-                if( pInfo->m_pCopyFn ) pInfo->m_pCopyFn( Scratch.data(), pSrc );
-                else                   std::memcpy( Scratch.data(), pSrc, pInfo->m_Size );
-                GameMgr.ReinternShareComponent( NewEntity, *pInfo, Scratch.data() );
-                if( pInfo->m_pDestructFn ) pInfo->m_pDestructFn( Scratch.data() );
-                continue;
-            }
-
-            const auto iSrcType = RootDetails.m_pPool->findIndexComponentFromInfo(*pInfo);
-            const auto iDstType = Pool.findIndexComponentFromInfo(*pInfo);
-            if( iSrcType < 0 || iDstType < 0 ) continue;
-
-            auto pSrc = &RootDetails.m_pPool->m_pComponent[iSrcType][ RootDetails.m_PoolIndex.m_Value * pInfo->m_Size ];
-            auto pDst = &Pool.m_pComponent[iDstType][ NewDetails.m_PoolIndex.m_Value * pInfo->m_Size ];
-            if( pInfo->m_pCopyFn ) pInfo->m_pCopyFn(pDst, pSrc);
-            else                   std::memcpy(pDst, pSrc, pInfo->m_Size);
-        }
-    }
-
-    //-----------------------------------------------------------------------------------------
     // Walks Root -> children.m_List[Path[0]] -> children.m_List[Path[1]] -> ... and returns the
     // entity reached, or an invalid entity if Path is empty (Root itself), any index is out of
     // range, or an intermediate entity has no children component at all. Used to resolve a
@@ -401,7 +468,7 @@ namespace xecs::persist::details
     // itself have already moved the parsed prefab_instance component into the entity's own pool
     // slot - this function reads it back out from there, not from a temporary, since the read loop
     // is the caller's own container-specific code). Applies each override's PropertyValueAsString
-    // on top of the prefab defaults CopyPrefabInstanceDefaults already wrote - this IS the actual
+    // on top of the prefab defaults the loader already staged (staged_components::CopyFrom) - this IS the actual
     // override value now (the save side never writes the owning component's own data for an
     // overridden property at all), so without this step every overridden property would silently
     // read back as the prefab's plain default. An override whose m_MemberPath is non-empty targets
@@ -443,6 +510,45 @@ namespace xecs::persist::details
         }
     }
 
+    // Applies one component's recorded property overrides onto that component's data.
+    template< typename T_COMPONENT_OVERRIDE >
+    inline void ApplyComponentPropertyOverrides( const T_COMPONENT_OVERRIDE& CompOverride, const xecs::component::type::info& OwnerInfo, std::byte* pOwnerData ) noexcept
+    {
+        for( auto& PropOverride : CompOverride.m_PropertyOverrides )
+        {
+            xproperty::settings::context Context{};
+            xproperty::any                CurrentValue;
+            bool                           bFound = false;
+            xproperty::sprop::collector( pOwnerData, *OwnerInfo.m_pPropertyTable, Context, [&]( const char* pPropertyName, xproperty::any&& Value, const xproperty::type::members&, bool, const void* ) noexcept
+            {
+                if( PropOverride.m_PropertyName == pPropertyName ) { CurrentValue = std::move(Value); bFound = true; }
+            });
+            if( !bFound || !CurrentValue.hasValue() ) continue;
+
+            xproperty::any ParsedValue;
+            if( CurrentValue.isEnum() )
+            {
+                ParsedValue = std::move(CurrentValue);
+                SetEnumAnyFromString(ParsedValue, PropOverride.m_PropertyValueAsString);
+            }
+            else
+            {
+                // std::string's own buffer, not a manually null-terminated copy: some StringToAny
+                // cases read String.data() as a null-terminated C-string (stol/atoi/...), but the
+                // std::string case uses String.size() directly - std::string::data() is guaranteed
+                // null-terminated since C++11 while .size() still excludes that terminator,
+                // satisfying both without an appended '\0' silently becoming part of the parsed
+                // string's OWN content.
+                std::string ValueBuffer = PropOverride.m_PropertyValueAsString;
+                if( xproperty::settings::StringToAny(ParsedValue, CurrentValue.getTypeGuid(), std::span<char>(ValueBuffer.data(), ValueBuffer.size())) == false ) continue;
+            }
+
+            std::string SetError;
+            xproperty::sprop::setProperty( SetError, pOwnerData, *OwnerInfo.m_pPropertyTable, xproperty::sprop::container::prop{ PropOverride.m_PropertyName, ParsedValue }, Context );
+        }
+    }
+
+    // Live version: Entity and the members its overrides address already exist.
     inline void ApplyPrefabInstancePropertyOverrides( xecs::game_mgr::instance& GameMgr, xecs::component::entity Entity ) noexcept
     {
         auto& EDetails = GameMgr.m_ComponentMgr.getEntityDetails(Entity);
@@ -462,42 +568,39 @@ namespace xecs::persist::details
             auto& TDetails = GameMgr.m_ComponentMgr.getEntityDetails(TargetEntity);
             if( TDetails.m_pPool == nullptr ) continue;
 
+            // DATA only: a live SHARE value is shared by the whole family, it can't be written in place.
             const auto iOwnerType = TDetails.m_pPool->findIndexComponentFromInfo(*pOwnerInfo);
             if( iOwnerType < 0 ) continue;
-            auto* pOwnerData = &TDetails.m_pPool->m_pComponent[iOwnerType][ TDetails.m_PoolIndex.m_Value * pOwnerInfo->m_Size ];
 
-            for( auto& PropOverride : CompOverride.m_PropertyOverrides )
+            ApplyComponentPropertyOverrides( CompOverride, *pOwnerInfo, &TDetails.m_pPool->m_pComponent[iOwnerType][ TDetails.m_PoolIndex.m_Value * pOwnerInfo->m_Size ] );
+        }
+    }
+
+    // Staged version, used while loading - before creation, so builder systems see the overridden
+    // values. A member path walks staged children lists, which still hold encoded references;
+    // FindStaged(Encoded) returns that member's staged_components (or nullptr).
+    template< typename T_FIND_STAGED >
+    inline void ApplyPrefabInstancePropertyOverrides( staged_components& Root, T_FIND_STAGED&& FindStaged ) noexcept
+    {
+        auto* pPI = Root.find<xecs::editor::prefab_instance>();
+        if( pPI == nullptr ) return;
+
+        for( auto& CompOverride : pPI->m_lComponents )
+        {
+            auto* pOwnerInfo = xecs::component::mgr::findComponentTypeInfo( xecs::component::type::guid{CompOverride.m_ComponentTypeGuid} );
+            if( pOwnerInfo == nullptr || pOwnerInfo->m_pPropertyTable == nullptr ) continue;
+
+            staged_components* pTarget = &Root;
+            for( auto Index : CompOverride.m_MemberPath )
             {
-                xproperty::settings::context Context{};
-                xproperty::any                CurrentValue;
-                bool                           bFound = false;
-                xproperty::sprop::collector( pOwnerData, *pOwnerInfo->m_pPropertyTable, Context, [&]( const char* pPropertyName, xproperty::any&& Value, const xproperty::type::members&, bool, const void* ) noexcept
-                {
-                    if( PropOverride.m_PropertyName == pPropertyName ) { CurrentValue = std::move(Value); bFound = true; }
-                });
-                if( !bFound || !CurrentValue.hasValue() ) continue;
-
-                xproperty::any ParsedValue;
-                if( CurrentValue.isEnum() )
-                {
-                    ParsedValue = std::move(CurrentValue);
-                    SetEnumAnyFromString(ParsedValue, PropOverride.m_PropertyValueAsString);
-                }
-                else
-                {
-                    // std::string's own buffer, not a manually null-terminated copy: some StringToAny
-                    // cases read String.data() as a null-terminated C-string (stol/atoi/...), but the
-                    // std::string case uses String.size() directly - std::string::data() is guaranteed
-                    // null-terminated since C++11 while .size() still excludes that terminator,
-                    // satisfying both without an appended '\0' silently becoming part of the parsed
-                    // string's OWN content.
-                    std::string ValueBuffer = PropOverride.m_PropertyValueAsString;
-                    if( xproperty::settings::StringToAny(ParsedValue, CurrentValue.getTypeGuid(), std::span<char>(ValueBuffer.data(), ValueBuffer.size())) == false ) continue;
-                }
-
-                std::string SetError;
-                xproperty::sprop::setProperty( SetError, pOwnerData, *pOwnerInfo->m_pPropertyTable, xproperty::sprop::container::prop{ PropOverride.m_PropertyName, ParsedValue }, Context );
+                auto* pChildren = pTarget->find<xecs::component::children>();
+                pTarget = ( pChildren && Index < pChildren->m_List.size() ) ? FindStaged( DecodeRef(pChildren->m_List[Index]) ) : nullptr;
+                if( pTarget == nullptr ) break;
             }
+            if( pTarget == nullptr ) continue;
+
+            if( auto* pOwnerData = pTarget->find(*pOwnerInfo) )
+                ApplyComponentPropertyOverrides( CompOverride, *pOwnerInfo, pOwnerData );
         }
     }
 

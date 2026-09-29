@@ -189,6 +189,26 @@ mgr::AddOrRemoveComponents
         m_lArchetype.push_back(std::move(UniqueArchetype));
         m_lArchetypeBits.push_back({ Bits, Archetype.m_ExclusiveTagsBits });
 
+        // While builders are on, builder components only belong on prefab templates and share-
+        // entities - anywhere else means a creation path that bypassed game_mgr::getBuildPlan.
+        if( m_GameMgr.areBuildersEnabled() )
+        {
+            const xecs::component::type::info* pBuilder = nullptr;
+            bool                               bExempt  = false;
+            Bits.Foreach( [&]( int, const xecs::component::type::info& Info ) noexcept
+            {
+                if( xecs::component::type::IsComponentType<xecs::prefab::tag>(&Info)
+                 || xecs::component::type::IsComponentType<xecs::component::share_as_data_exclusive_tag>(&Info) ) bExempt = true;
+                else if( Info.m_bBuilder && pBuilder == nullptr ) pBuilder = &Info;
+            });
+
+            if( pBuilder && false == bExempt )
+            {
+                std::printf("[xECS Builder] ERROR: entities with builder component '%s' are being created without building them (this creation path isn't staged yet) - its builder systems won't run\n", pBuilder->m_pName);
+                std::fflush(stdout);
+            }
+        }
+
         // Notify anyone interested
         m_Events.m_OnNewArchetype.NotifyAll(Archetype);
 

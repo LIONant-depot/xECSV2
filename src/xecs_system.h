@@ -19,6 +19,7 @@ namespace xecs::system
         ,   POOL_FAMILY_DESTROY
         ,   GLOBAL_EVENT
         ,   SYSTEM_EVENT
+        ,   BUILDER
         };
 
         struct update
@@ -68,6 +69,17 @@ namespace xecs::system
             const char*                  m_pName            = "Unnamed Component Change System";
             guid                         m_Guid             {};
       const xecs::component::type::info* m_pComponentInfo   {};
+        };
+
+        // Runs once per entity while it is being created, never in the frame loop. Reads the entity's
+        // builder components (const) and hands their data to whatever system owns it from then on,
+        // writing back only handles - see doc/xecs_builder_components.md.
+        struct builder
+        {
+            static constexpr auto       id_v                = id::BUILDER;
+            static constexpr auto       is_notifier_v       = false;
+            const char*                 m_pName             = "Unnamed Builder System";
+            guid                        m_Guid              {};
         };
 
         struct pool_family_create
@@ -153,6 +165,8 @@ namespace xecs::system
         {
             using notifier_registration = void( xecs::archetype::instance&, xecs::system::instance&) noexcept;
             using destroy_fn            = void( xecs::system::instance& ) noexcept;
+            using resolve_fn            = std::byte*( const void* pContext, const xecs::component::type::info& Info ) noexcept;
+            using build_fn              = void( xecs::system::instance&, resolve_fn* pResolve, const void* pContext ) noexcept;
 
             const type::guid                        m_Guid;
             // Runtime-computed (by system::mgr::RegisterSystem), written back onto what's otherwise
@@ -165,6 +179,7 @@ namespace xecs::system
             mutable xecs::query::instance           m_Query;
             notifier_registration* const            m_NotifierRegistration;
             destroy_fn* const                       m_DestroyFunction;
+            build_fn* const                         m_BuildFunction;        // Builder systems only: calls operator() with each argument's pointer from pResolve
             const char* const                       m_pName;
             const id                                m_ID;
             const std::span<const component_access> m_Access;

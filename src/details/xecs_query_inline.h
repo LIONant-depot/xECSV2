@@ -78,7 +78,7 @@ namespace xecs::query
             {
                 if constexpr (std::is_pointer_v<T_C>)
                 {
-                    m_OneOf.AddFromComponents<T_C>();
+                    // Optional - the callee gets nullptr when the entity doesn't have it.
                 }
                 else if constexpr (std::is_reference_v<T_C>)
                 {

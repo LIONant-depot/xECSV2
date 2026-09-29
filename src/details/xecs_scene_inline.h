@@ -218,7 +218,17 @@ namespace xecs::scene
         }
 
         //-----------------------------------------------------------------------------------------
-        inline xerr LoadEntity( mgr& Mgr, instance& Scene, permanent_id Id ) noexcept
+        // One entity read from its file into staging, not yet created (see staged_components). A
+        // scene is loaded as: read every entity -> apply prefab overrides in staging -> create
+        // (which runs the builder systems, so they see the overridden values) -> remap references.
+        struct staged_entity
+        {
+            permanent_id                                               m_Id     = invalid_permanent_id_v;
+            const xecs::game_mgr::instance::build_plan*                m_pPlan  = nullptr;
+            std::unique_ptr<xecs::persist::details::staged_components> m_pStaged;
+        };
+
+        inline xerr ReadEntity( mgr& Mgr, instance& Scene, permanent_id Id, staged_entity& Out ) noexcept
         {
             xecs::serializer::stream TextFile;
             if( auto Err = TextFile.Open( true, EntityPath(Mgr, Scene.m_Guid, Id), xtextfile::file_type::TEXT, xtextfile::flags{} ); Err )
@@ -270,98 +280,59 @@ namespace xecs::scene
             }
             const bool bIsPrefabInstance = PrefabRootEntity.isValid();
 
-            auto& Archetype = Mgr.m_GameMgr.getOrCreateArchetype( { ArchetypeInfos.data(), ArchetypeInfos.size() } );
+            // Created later, once, already in its final share family - and, when builders are on,
+            // already without its builder components (doc/xecs_builder_components.md).
+            Out.m_Id      = FileId;
+            Out.m_pPlan   = &Mgr.m_GameMgr.getBuildPlan( { ArchetypeInfos.data(), ArchetypeInfos.size() } );
+            Out.m_pStaged = std::make_unique<xecs::persist::details::staged_components>( ArchetypeInfos );
+            auto& Staged  = *Out.m_pStaged;
 
-            // CreateEntity(Infos, MoveData) asserts MoveData.size()==1 whenever the archetype
-            // has SHARE components, and findIndexComponentFromInfo fails for SHARE on the
-            // entity DATA pool anyway. Default-construct into the default share family;
-            // DATA values are filled below, SHARE values are re-interned from the file.
-            auto NewEntity = Archetype.CreateEntity();
-
+            // A prefab instance starts from the prefab's CURRENT values; the file only holds the
+            // components added on this instance (overrides are applied afterwards, in staging).
             if( bIsPrefabInstance )
-                xecs::persist::details::CopyPrefabInstanceDefaults( Mgr.m_GameMgr, PrefabRootEntity, NewEntity, ArchetypeInfos );
+                Staged.CopyFrom( Mgr.m_GameMgr, PrefabRootEntity );
 
             for( auto pInfo : Infos )
             {
-                // Re-resolve every iteration: ReinternShareComponent (and CopyPrefabInstanceDefaults
-                // for SHARE) may MoveIn the entity into a different pool family, invalidating any
-                // earlier EDetails/Pool references.
-                auto& EDetails = Mgr.m_GameMgr.m_ComponentMgr.getEntityDetails(NewEntity);
-                auto& Pool      = *EDetails.m_pPool;
-
+                // TempPI was already parsed (it's always first in the file) - the stream is past it.
                 if( xecs::component::type::IsComponentType<xecs::editor::prefab_instance>(pInfo) )
                 {
-                    // TempPI already holds this component's fully-parsed data (read once, above,
-                    // before the archetype even existed, and always first - SaveEntity guarantees it)
-                    // - move it into the real pool slot instead of reading the same block a second
-                    // time (there's nothing left to read for it anyway; the stream has already moved
-                    // past it).
-                    Pool.getComponent<xecs::editor::prefab_instance>(EDetails.m_PoolIndex) = std::move(TempPI);
+                    *Staged.find<xecs::editor::prefab_instance>() = std::move(TempPI);
                     continue;
                 }
 
                 // TAG: already in the archetype via ArchetypeInfos; SaveEntity writes no data block for it.
                 if( pInfo->m_TypeID == xecs::component::type::id::TAG ) continue;
 
-                // Anything else reaching here is either a plain entity's ordinary component, or a
-                // prefab instance's own "added only to this instance" component (no prefab default
-                // exists for it, so it's fully serialized exactly like an ordinary one) - same read
-                // either way. SHARE is special: values live on the share-entity, so deserialize
-                // into a scratch buffer then re-intern (matching editor share property edits).
-                if( pInfo->m_TypeID == xecs::component::type::id::SHARE )
-                {
-                    std::vector<std::byte> Scratch( pInfo->m_Size );
-                    if( pInfo->m_pConstructFn ) pInfo->m_pConstructFn( Scratch.data() );
-                    if( auto Err = xecs::persist::details::SerializeOneComponent(TextFile, true, *pInfo, Scratch.data()); Err )
-                    {
-                        std::printf("[Scene::LoadEntity] Id=%u : share component '%s' failed to read (%s)\n", FileId, pInfo->m_pName, std::string(Err.getMessage()).c_str());
-                        std::fflush(stdout);
-                        if( pInfo->m_pDestructFn ) pInfo->m_pDestructFn( Scratch.data() );
-                        auto E = NewEntity;
-                        Mgr.m_GameMgr.DeleteEntity(E);
-                        return Err;
-                    }
-                    if( false == Mgr.m_GameMgr.ReinternShareComponent( NewEntity, *pInfo, Scratch.data() ) )
-                    {
-                        if( pInfo->m_pDestructFn ) pInfo->m_pDestructFn( Scratch.data() );
-                        auto E = NewEntity;
-                        Mgr.m_GameMgr.DeleteEntity(E);
-                        return xerr::create<xecs::game_mgr::state::FAILURE, "Scene entity failed to re-intern a share component on load">();
-                    }
-                    if( pInfo->m_pDestructFn ) pInfo->m_pDestructFn( Scratch.data() );
-                    continue;
-                }
-
-                const auto iType = Pool.findIndexComponentFromInfo(*pInfo);
-                assert(iType >= 0);
-                auto pData = &Pool.m_pComponent[iType][ EDetails.m_PoolIndex.m_Value * pInfo->m_Size ];
-
-                if( auto Err = xecs::persist::details::SerializeOneComponent(TextFile, true, *pInfo, pData); Err )
+                if( auto Err = xecs::persist::details::SerializeOneComponent(TextFile, true, *pInfo, Staged.find(*pInfo)); Err )
                 {
                     std::printf("[Scene::LoadEntity] Id=%u : component '%s' failed to read (%s)\n", FileId, pInfo->m_pName, std::string(Err.getMessage()).c_str());
                     std::fflush(stdout);
-                    auto E = NewEntity;
-                    Mgr.m_GameMgr.DeleteEntity(E);
                     return Err;
                 }
             }
 
-            // ApplyPrefabInstancePropertyOverrides is NOT called here anymore - see EnsureLoaded's
-            // own third pass, after the whole scene's reference remap. An override whose
-            // m_MemberPath is non-empty needs to walk THIS entity's own children.m_List
-            // (ResolveMemberPath) to find its real target - but right here, immediately after this
-            // one entity's own per-component read loop, children.m_List (like every other reference-
-            // bearing field - see children::ReportReferences) still holds RAW, un-remapped encoded
-            // values, not real xecs::component::entity handles - those only become valid once
-            // RemapLoadedEntityReferences has run for every entity in the scene, which happens in a
-            // separate pass AFTER this whole per-entity loop finishes. Calling it this early treated
-            // encoded garbage as a live entity handle and crashed hard (no assert, just a silent
-            // exit) - direct user report, confirmed by tracing exactly how far the load log got
-            // before the process died.
+            return {};
+        }
 
-            Scene.m_LocalToRuntime[FileId]           = NewEntity;
-            Scene.m_RuntimeToLocal[NewEntity.m_Value] = FileId;
+        //-----------------------------------------------------------------------------------------
+        inline void CreateStagedEntity( mgr& Mgr, instance& Scene, staged_entity& Staged ) noexcept
+        {
+            const auto NewEntity = Staged.m_pStaged->Create( Mgr.m_GameMgr, *Staged.m_pPlan );
+            Staged.m_pStaged.reset();
 
+            Scene.m_LocalToRuntime[Staged.m_Id]       = NewEntity;
+            Scene.m_RuntimeToLocal[NewEntity.m_Value] = Staged.m_Id;
+        }
+
+        //-----------------------------------------------------------------------------------------
+        // Single-entity read + create (e.g. restoring one deleted entity). Its prefab overrides are
+        // the caller's job, on the live entity. A whole scene goes through EnsureLoaded instead.
+        inline xerr LoadEntity( mgr& Mgr, instance& Scene, permanent_id Id ) noexcept
+        {
+            staged_entity Staged;
+            if( auto Err = ReadEntity( Mgr, Scene, Id, Staged ); Err ) return Err;
+            CreateStagedEntity( Mgr, Scene, Staged );
             return {};
         }
     }
@@ -953,9 +924,14 @@ namespace xecs::scene
 
             Scene.m_State = state::LoadingEntities;
 
+            // 1) Read every entity into staging.
+            std::vector<staged_entity>                     StagedEntities;
+            std::unordered_map<permanent_id, std::size_t>  StagedIndex;
+            StagedEntities.reserve( ActiveEntities.size() );
             for( auto Id : ActiveEntities )
             {
-                if( auto Err = LoadEntity(Mgr, Scene, Id); Err )
+                staged_entity Staged;
+                if( auto Err = ReadEntity(Mgr, Scene, Id, Staged); Err )
                 {
                     // A single corrupted/unreadable entity file (e.g. left truncated by a crash
                     // mid-save - Save is not yet crash-atomic) must not take the WHOLE scene down
@@ -966,8 +942,27 @@ namespace xecs::scene
                     // error, rather than silently loading a wrong entity.
                     std::printf("[Scene::EnsureLoaded] WARNING: entity Id=%u failed to load (%s) - skipping it, scene will load without it\n", Id, std::string(Err.getMessage()).c_str());
                     std::fflush(stdout);
+                    continue;
                 }
+                StagedIndex[Staged.m_Id] = StagedEntities.size();
+                StagedEntities.push_back( std::move(Staged) );
             }
+
+            // 2) Prefab instance overrides, in staging - so builder systems (run at creation) see the
+            //    overridden values. Member paths walk staged children lists (encoded permanent ids).
+            for( auto& Staged : StagedEntities )
+            {
+                xecs::persist::details::ApplyPrefabInstancePropertyOverrides( *Staged.m_pStaged, [&]( std::int64_t Encoded ) noexcept -> xecs::persist::details::staged_components*
+                {
+                    if( Encoded <= 0 ) return nullptr;
+                    auto It = StagedIndex.find( static_cast<permanent_id>(Encoded) );
+                    return It == StagedIndex.end() ? nullptr : StagedEntities[It->second].m_pStaged.get();
+                });
+            }
+
+            // 3) Create them - each placed once, in its final archetype, builder systems run.
+            for( auto& Staged : StagedEntities )
+                CreateStagedEntity( Mgr, Scene, Staged );
 
             // Soft-fail dangling external refs the same way the local-ref remap just below does
             // (encode null + WARNING, keep loading). A hard Failure here used to make the WHOLE
@@ -1037,18 +1032,6 @@ namespace xecs::scene
                     }
                     return Scene.m_ExternalToRuntime[ExtIndex];
                 });
-            }
-
-            // Third pass, after every entity is loaded AND every reference (parent/children included)
-            // has been remapped to a real, live entity handle: NOW it's safe to apply each prefab
-            // instance's own recorded property overrides, since an override with a non-empty
-            // m_MemberPath needs to walk a REAL children.m_List to find its target - see the removed
-            // call's own comment in LoadEntity above for why doing this any earlier crashed.
-            for( auto& Pair : Scene.m_LocalToRuntime )
-            {
-                auto& Details = Mgr.m_GameMgr.m_ComponentMgr.getEntityDetails(Pair.second);
-                if( Details.m_pPool && Details.m_pPool->findIndexComponentFromInfo(xecs::component::type::info_v<xecs::editor::prefab_instance>) >= 0 )
-                    xecs::persist::details::ApplyPrefabInstancePropertyOverrides( Mgr.m_GameMgr, Pair.second );
             }
 
             // Append() bumps m_Size; Size()/Search read m_CurrentCount until flush. Flush before
