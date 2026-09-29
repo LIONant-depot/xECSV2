@@ -408,6 +408,41 @@ namespace xecs::persist::details
     // a non-root member of THIS group (a plain child, or the root of a nested instance) rather than
     // Entity's own data - resolved via ResolveMemberPath before locating pOwnerData.
     //-----------------------------------------------------------------------------------------
+    // Every unregistered enum shares TypeGuid 1 (var_type<T>'s own add_unregistered_enum<true,T>
+    // specialization, xproperty/source/xcore/my_properties.h) - StringToAny/AnyToString have no
+    // per-enum case (both hit their own `default: assert(false)`), since a bare TypeGuid can never
+    // carry one SPECIFIC enum's m_RegisteredEnumSpan (every unregistered enum shares guid_v==1).
+    // These two mirror xscene.plugin's own FormatPropertyValue/ResolveEnumAny convention (they can't
+    // just call those - xECSV2 is a dependency of xscene.plugin, not the other way around).
+    inline int EnumAnyToString(std::span<char> String, const xproperty::any& Value) noexcept
+    {
+        if (const char* pName = Value.getEnumString())
+            return sprintf_s(String.data(), String.size(), "%s", pName);
+        return sprintf_s(String.data(), String.size(), "%u", Value.getEnumValue());
+    }
+
+    // Value must already carry the real enum m_pType (e.g. read fresh off the live instance via
+    // xproperty::sprop::collector) - overwrites its raw bytes in place from ValueStr, matching an
+    // enum_item name first and falling back to a numeric parse. Safe because an enum's storage is
+    // POD, the same guarantee any::getCastValue's own read-side switch on m_pType->m_Size relies on.
+    inline void SetEnumAnyFromString(xproperty::any& Value, const std::string& ValueStr) noexcept
+    {
+        std::uint32_t EnumValue = static_cast<std::uint32_t>(std::strtoul(ValueStr.c_str(), nullptr, 10));
+        for (auto& E : Value.getEnumSpan())
+        {
+            if (ValueStr == E.m_pName) { EnumValue = E.m_Value; break; }
+        }
+
+        switch (Value.getType()->m_Size)
+        {
+        case 1: Value.storageAs<std::uint8_t>()  = static_cast<std::uint8_t>(EnumValue);  break;
+        case 2: Value.storageAs<std::uint16_t>() = static_cast<std::uint16_t>(EnumValue); break;
+        case 4: Value.storageAs<std::uint32_t>() = static_cast<std::uint32_t>(EnumValue); break;
+        case 8: Value.storageAs<std::uint64_t>() = static_cast<std::uint64_t>(EnumValue); break;
+        default: assert(false); break;
+        }
+    }
+
     inline void ApplyPrefabInstancePropertyOverrides( xecs::game_mgr::instance& GameMgr, xecs::component::entity Entity ) noexcept
     {
         auto& EDetails = GameMgr.m_ComponentMgr.getEntityDetails(Entity);
@@ -434,23 +469,31 @@ namespace xecs::persist::details
             for( auto& PropOverride : CompOverride.m_PropertyOverrides )
             {
                 xproperty::settings::context Context{};
-                std::uint32_t                 TypeGuid = 0;
+                xproperty::any                CurrentValue;
+                bool                           bFound = false;
                 xproperty::sprop::collector( pOwnerData, *pOwnerInfo->m_pPropertyTable, Context, [&]( const char* pPropertyName, xproperty::any&& Value, const xproperty::type::members&, bool, const void* ) noexcept
                 {
-                    if( PropOverride.m_PropertyName == pPropertyName && Value.m_pType )
-                        TypeGuid = Value.m_pType->m_GUID;
+                    if( PropOverride.m_PropertyName == pPropertyName ) { CurrentValue = std::move(Value); bFound = true; }
                 });
-                if( TypeGuid == 0 ) continue;
+                if( !bFound || !CurrentValue.hasValue() ) continue;
 
-                // std::string's own buffer, not a manually null-terminated copy: some StringToAny
-                // cases read String.data() as a null-terminated C-string (stol/atoi/...), but the
-                // std::string case uses String.size() directly - std::string::data() is guaranteed
-                // null-terminated since C++11 while .size() still excludes that terminator,
-                // satisfying both without an appended '\0' silently becoming part of the parsed
-                // string's OWN content.
                 xproperty::any ParsedValue;
-                std::string    ValueBuffer = PropOverride.m_PropertyValueAsString;
-                if( xproperty::settings::StringToAny(ParsedValue, TypeGuid, std::span<char>(ValueBuffer.data(), ValueBuffer.size())) == false ) continue;
+                if( CurrentValue.isEnum() )
+                {
+                    ParsedValue = std::move(CurrentValue);
+                    SetEnumAnyFromString(ParsedValue, PropOverride.m_PropertyValueAsString);
+                }
+                else
+                {
+                    // std::string's own buffer, not a manually null-terminated copy: some StringToAny
+                    // cases read String.data() as a null-terminated C-string (stol/atoi/...), but the
+                    // std::string case uses String.size() directly - std::string::data() is guaranteed
+                    // null-terminated since C++11 while .size() still excludes that terminator,
+                    // satisfying both without an appended '\0' silently becoming part of the parsed
+                    // string's OWN content.
+                    std::string ValueBuffer = PropOverride.m_PropertyValueAsString;
+                    if( xproperty::settings::StringToAny(ParsedValue, CurrentValue.getTypeGuid(), std::span<char>(ValueBuffer.data(), ValueBuffer.size())) == false ) continue;
+                }
 
                 std::string SetError;
                 xproperty::sprop::setProperty( SetError, pOwnerData, *pOwnerInfo->m_pPropertyTable, xproperty::sprop::container::prop{ PropOverride.m_PropertyName, ParsedValue }, Context );
@@ -786,7 +829,7 @@ namespace xecs::persist::details
                 {
                     if( PropOverride.m_PropertyName != pPropertyName ) return;
                     std::array<char, 256> ValueBuffer{};
-                    const auto             ValueLen = xproperty::settings::AnyToString(ValueBuffer, Value);
+                    const auto             ValueLen = Value.isEnum() ? EnumAnyToString(ValueBuffer, Value) : xproperty::settings::AnyToString(ValueBuffer, Value);
                     PropOverride.m_PropertyValueAsString.assign(ValueBuffer.data(), ValueLen > 0 ? static_cast<std::size_t>(ValueLen) : 0);
                 });
             }
