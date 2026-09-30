@@ -64,7 +64,7 @@ struct body_builder : xecs::system::instance
     void operator()( const xecs::component::entity&   Entity      // the real, final entity - for Box3D user data
                    , xlioncore::transform&             T
                    , const physics_body_properties&    BodyProps   // builder component: read-only
-                   , const physics_shape_properties&   ShapeProps  // builder component: read-only
+                   , const physics_collider_box*         pBoxes      // builder component: read-only (optional - the entity may have any mix of collider components)
                    , physics_body&                     Body        // handle component: gets m_BodyId
                    , const physics_dynamics*           pDyn ) noexcept;   // pointer = optional
 };
@@ -171,7 +171,7 @@ What goes away:
 
 * `OnSceneReady` and its statics loop.
 * The per-frame `NeedsRecreate` / `B3_IS_NULL` poll.
-* `physics_body_properties` / `physics_shape_properties` in the `OnUpdate` query.
+* `physics_body_properties` / the `physics_collider_*` components in the `OnUpdate` query.
 * Recreating a body from component data (use Box3D setters instead).
 
 ## Open questions
