@@ -16,6 +16,9 @@ namespace xecs::scene
         // the runtime load path beyond round-tripping it back into instance::m_Folders.
         std::vector<folder>                    m_Folders          = {};
 
+        // User-given entity display names (Level Tree rename) - see entity_name in xecs_scene.h.
+        std::vector<entity_name>               m_EntityNames      = {};
+
         // The authoritative list of this scene's currently-valid entities. Load reads ONLY these ids
         // (not a directory scan of entity_db - see xecs_scene_inline.h's LoadSceneDescriptor/
         // EnsureLoaded), so removing an id here is what actually makes an entity "deleted": its
@@ -29,6 +32,7 @@ namespace xecs::scene
         , obj_member<"ExternalRefs",    &descriptor::m_ExternalRefTable, member_flags<flags::SHOW_READONLY>>
         , obj_member<"ActiveEntities",  &descriptor::m_ActiveEntities,   member_flags<flags::SHOW_READONLY>>
         , obj_member<"Folders",         &descriptor::m_Folders,          member_flags<flags::SHOW_READONLY>>
+        , obj_member<"EntityNames",     &descriptor::m_EntityNames,      member_flags<flags::SHOW_READONLY>>
         )
     };
     XPROPERTY_VREG(descriptor)

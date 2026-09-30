@@ -79,6 +79,22 @@ namespace xecs::scene
     };
     XPROPERTY_REG(folder)
 
+    // A user-given display name for one entity (Level Tree inline rename). Editor-organizational like a
+    // folder: not a component, never seen at runtime, lives in the scene so it saves/loads with it.
+    // An entity with no entry just shows its id. Entries of entities that no longer exist are dropped on save.
+    struct entity_name
+    {
+        permanent_id    m_Id   = invalid_permanent_id_v;
+        std::string     m_Name;
+
+        XPROPERTY_DEF
+        ( "SceneEntityName", entity_name
+        , obj_member<"Id",   &entity_name::m_Id>
+        , obj_member<"Name", &entity_name::m_Name>
+        )
+    };
+    XPROPERTY_REG(entity_name)
+
     enum class state : std::uint8_t
     { Unloaded
     , WaitingForParents
@@ -104,6 +120,9 @@ namespace xecs::scene
         // Editor-organizational grouping, live/mutable during editing - copied to/from
         // descriptor::m_Folders wholesale on save/load, same role m_ParentScenes already plays.
         std::vector<folder>                        m_Folders;
+
+        // Entity display names (see entity_name) - live map, copied to/from descriptor::m_EntityNames on save/load.
+        std::unordered_map<permanent_id, std::string> m_EntityNames;
 
         // Residency. A scene is unloadable only when both are zero.
         int                                         m_ExplicitRequests    = 0;

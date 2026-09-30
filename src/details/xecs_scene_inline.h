@@ -201,6 +201,7 @@ namespace xecs::scene
                 Scene.m_ParentScenes.clear();
                 Scene.m_ExternalRefTable.clear();
                 Scene.m_Folders.clear();
+                Scene.m_EntityNames.clear();
                 OutActiveEntities.clear();
                 return {};
             }
@@ -213,6 +214,8 @@ namespace xecs::scene
             Scene.m_ParentScenes     = std::move(Descriptor.m_ParentScenes);
             Scene.m_ExternalRefTable = std::move(Descriptor.m_ExternalRefTable);
             Scene.m_Folders          = std::move(Descriptor.m_Folders);
+            Scene.m_EntityNames.clear();
+            for( auto& N : Descriptor.m_EntityNames ) Scene.m_EntityNames[N.m_Id] = std::move(N.m_Name);
             OutActiveEntities        = std::move(Descriptor.m_ActiveEntities);
             return {};
         }
@@ -392,6 +395,11 @@ namespace xecs::scene
         Descriptor.m_ParentScenes     = pScene->m_ParentScenes;
         Descriptor.m_ExternalRefTable = pScene->m_ExternalRefTable;
         Descriptor.m_Folders          = pScene->m_Folders;
+
+        // Only names of entities that still exist, sorted by id - a stable, diffable file.
+        for( auto& [Id, Name] : pScene->m_EntityNames )
+            if( pScene->m_LocalToRuntime.contains(Id) ) Descriptor.m_EntityNames.push_back({ .m_Id = Id, .m_Name = Name });
+        std::sort( Descriptor.m_EntityNames.begin(), Descriptor.m_EntityNames.end(), [](auto& A, auto& B) noexcept { return A.m_Id < B.m_Id; } );
 
         // Sorted by (tree depth, then name) - flat/"greedy" by depth, NOT nested/pre-order - for the
         // same "stable, diffable file" reason m_ActiveEntities is sorted below, with one more
