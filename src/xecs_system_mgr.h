@@ -13,12 +13,18 @@ namespace xecs::system
         std::uint64_t   m_Guid      {};
         std::string     m_Name;
         bool            m_bEnabled  = true;
+        // The system this one is connected to and the NAME of its connector (a name, not an index: it still means the same when the parent
+        // gets another connector). No parent: the system runs at the top level.
+        std::uint64_t   m_ParentGuid{};
+        std::string     m_Connector;
 
         XPROPERTY_DEF
         ( "SystemOrderEntry", system_order_entry
-        , obj_member<"Guid",    &system_order_entry::m_Guid>
-        , obj_member<"Name",    &system_order_entry::m_Name>
-        , obj_member<"Enabled", &system_order_entry::m_bEnabled>
+        , obj_member<"Guid",       &system_order_entry::m_Guid>
+        , obj_member<"Name",       &system_order_entry::m_Name>
+        , obj_member<"Enabled",    &system_order_entry::m_bEnabled>
+        , obj_member<"ParentGuid", &system_order_entry::m_ParentGuid>
+        , obj_member<"Connector",  &system_order_entry::m_Connector>
         )
     };
     XPROPERTY_REG(system_order_entry)
@@ -44,6 +50,8 @@ namespace xecs::system
         type::guid  m_Guid;
         const char* m_pName;
         bool        m_bEnabled;
+        type::guid  m_ParentGuid    {};         // the system this one is connected to (empty: top level)
+        int         m_ParentConnector = -1;     // and which of its connectors
     };
 
     //-----------------------------------------------------------------
@@ -103,6 +111,23 @@ namespace xecs::system
         void                    SetUpdateSystemEnabled  ( type::guid Guid
                                                         , bool        bEnabled
                                                         ) noexcept;
+        // Connects Child to a connector of Parent (an empty Parent: back to the top level). Refused (false) when the parent does not exist or
+        // has no such connector, or when it would make a system its own ancestor. The child goes to the end of the children of that connector.
+        inline
+        bool                    SetUpdateSystemParent   ( type::guid Child
+                                                        , type::guid Parent
+                                                        , int        ConnectorIndex
+                                                        , bool       bGoLast = true
+                                                        ) noexcept;
+        // Runs the children of one connector of Parent, in order. (A system calls this through system::instance::RunConnector.)
+        inline
+        void                    RunChildren             ( const xecs::system::instance& Parent
+                                                        , int                           ConnectorIndex
+                                                        ) noexcept;
+        inline
+        std::span<const connector>
+                                GetConnectors           ( type::guid Guid
+                                                        ) const noexcept;
         // Called by game_mgr::instance::Run() on the Stopped->Running transition / Stop() on the
         // reverse - see their own comments. While stopped there is no snapshot, so every
         // Move/SetEnabled call directly IS the authored state (nothing else to keep in sync).

@@ -119,6 +119,10 @@ namespace xecs::system
         if constexpr(real_system::typedef_v.id_v == type::id::UPDATE )
         {
             m_Events.m_OnUpdate.Register<&real_system::Run>(System);
+
+            // The connectors the system declares (see xecs::system::connector).
+            if constexpr (requires { real_system::connectors_v; })
+                System.m_Connectors = std::span<const xecs::system::connector>(real_system::connectors_v);
         }
 
         //
@@ -187,7 +191,12 @@ namespace xecs::system
     void mgr::Run( void ) noexcept
     {
         m_Events.m_OnFrameStart.NotifyAll();
-        m_Events.m_OnUpdate.NotifyAll();
+        for( std::size_t i = 0; i < m_UpdaterSystems.size(); ++i )
+        {
+            if( m_UpdaterSystems[i].second->m_pParent ) continue;                       // connected: its parent runs it
+            const auto& D = m_Events.m_OnUpdate.m_Delegates[i];
+            if( D.m_bEnabled ) D.m_pCallback(D.m_pClass);
+        }
         m_Events.m_OnFrameEnd.NotifyAll();
     }
 
@@ -227,10 +236,18 @@ namespace xecs::system
         Rows.reserve(m_UpdaterSystems.size());
         for( std::size_t i = 0; i < m_UpdaterSystems.size(); ++i )
         {
+            const auto* pParent = m_UpdaterSystems[i].second->m_pParent;
+            type::guid  ParentGuid{};
+            if( pParent )
+                for( auto& Other : m_UpdaterSystems )
+                    if( Other.second.get() == pParent ) { ParentGuid = Other.first->m_Guid; break; }
+
             Rows.push_back(update_system_row
-            { .m_Guid     = m_UpdaterSystems[i].first->m_Guid
-            , .m_pName    = m_UpdaterSystems[i].first->m_pName
-            , .m_bEnabled = m_Events.m_OnUpdate.m_Delegates[i].m_bEnabled
+            { .m_Guid            = m_UpdaterSystems[i].first->m_Guid
+            , .m_pName           = m_UpdaterSystems[i].first->m_pName
+            , .m_bEnabled        = m_Events.m_OnUpdate.m_Delegates[i].m_bEnabled
+            , .m_ParentGuid      = ParentGuid
+            , .m_ParentConnector = m_UpdaterSystems[i].second->m_ParentConnector
             });
         }
         return Rows;
@@ -240,7 +257,7 @@ namespace xecs::system
 
     void mgr::MoveUpdateSystem( type::guid Guid, int Delta ) noexcept
     {
-        const int Step = (Delta > 0) - (Delta < 0); // -1, 0, or +1 - only an adjacent-neighbor swap is ever needed (one up/down click at a time)
+        const int Step = (Delta > 0) - (Delta < 0); // -1, 0, or +1 - one up/down click at a time
         if( Step == 0 ) return;
 
         int i = -1;
@@ -248,11 +265,17 @@ namespace xecs::system
             if( m_UpdaterSystems[k].first->m_Guid == Guid ) { i = k; break; }
         if( i < 0 ) return;
 
-        const int j = i + Step;
-        if( j < 0 || j >= static_cast<int>(m_UpdaterSystems.size()) ) return; // clamped at the ends
-
-        std::swap( m_UpdaterSystems[i],                m_UpdaterSystems[j] );
-        std::swap( m_Events.m_OnUpdate.m_Delegates[i], m_Events.m_OnUpdate.m_Delegates[j] );
+        // Order only means something among the systems that share a parent and a connector (the top level is the one with no parent):
+        // swap with the nearest of those in that direction, clamped at the ends.
+        const auto& Me = *m_UpdaterSystems[i].second;
+        for( int j = i + Step; j >= 0 && j < static_cast<int>(m_UpdaterSystems.size()); j += Step )
+        {
+            const auto& Other = *m_UpdaterSystems[j].second;
+            if( Other.m_pParent != Me.m_pParent || Other.m_ParentConnector != Me.m_ParentConnector ) continue;
+            std::swap( m_UpdaterSystems[i],                m_UpdaterSystems[j] );
+            std::swap( m_Events.m_OnUpdate.m_Delegates[i], m_Events.m_OnUpdate.m_Delegates[j] );
+            return;
+        }
     }
 
     //---------------------------------------------------------------------------
@@ -302,6 +325,8 @@ namespace xecs::system
             }
             m_Events.m_OnUpdate.m_Delegates[i].m_bEnabled = m_PreRunSnapshot[i].m_bEnabled;
         }
+        for( auto& Row : m_PreRunSnapshot )
+            SetUpdateSystemParent( Row.m_Guid, Row.m_ParentGuid, Row.m_ParentConnector, false );
 
         m_PreRunSnapshot.clear();
     }
@@ -321,6 +346,16 @@ namespace xecs::system
             , .m_Name     = m_UpdaterSystems[i].first->m_pName
             , .m_bEnabled = m_Events.m_OnUpdate.m_Delegates[i].m_bEnabled
             });
+
+            if( const auto* pParent = m_UpdaterSystems[i].second->m_pParent; pParent )
+                for( auto& Other : m_UpdaterSystems )
+                    if( Other.second.get() == pParent )
+                    {
+                        const int c = m_UpdaterSystems[i].second->m_ParentConnector;
+                        Config.m_UpdateOrder.back().m_ParentGuid = Other.first->m_Guid.m_Value;
+                        if( c >= 0 && c < static_cast<int>(pParent->m_Connectors.size()) ) Config.m_UpdateOrder.back().m_Connector = pParent->m_Connectors[c].m_pName;
+                        break;
+                    }
         }
 
         const auto ConfigFolder = std::format(L"{}\\Project.config", m_ProjectPath);
@@ -373,6 +408,96 @@ namespace xecs::system
             ++TargetIndex;
         }
 
+        // The connections: a parent that is gone, a connector it does not have (any more) or a loop leaves the system at the top level.
+        for( auto& Entry : Config.m_UpdateOrder )
+        {
+            if( Entry.m_ParentGuid == 0 ) continue;
+            int ParentConnector = -1;
+            for( auto& Other : m_UpdaterSystems )
+                if( Other.first->m_Guid.m_Value == Entry.m_ParentGuid )
+                {
+                    for( int c = 0; c < static_cast<int>(Other.second->m_Connectors.size()); ++c )
+                        if( Entry.m_Connector == Other.second->m_Connectors[c].m_pName ) { ParentConnector = c; break; }
+                    break;
+                }
+            if( ParentConnector >= 0 ) SetUpdateSystemParent( type::guid{ Entry.m_Guid }, type::guid{ Entry.m_ParentGuid }, ParentConnector, false );
+        }
+
         return {};
+    }
+
+    //---------------------------------------------------------------------------
+
+    bool mgr::SetUpdateSystemParent( type::guid Child, type::guid Parent, int ConnectorIndex, bool bGoLast ) noexcept
+    {
+        auto IndexOf = [&]( type::guid Guid ) noexcept
+        {
+            for( int k = 0; k < static_cast<int>(m_UpdaterSystems.size()); ++k )
+                if( m_UpdaterSystems[k].first->m_Guid == Guid ) return k;
+            return -1;
+        };
+
+        const int ci = IndexOf(Child);
+        if( ci < 0 ) return false;
+        auto& ChildSystem = *m_UpdaterSystems[ci].second;
+
+        if( Parent.empty() )                                            // back to the top level
+        {
+            ChildSystem.m_pParent = nullptr; ChildSystem.m_ParentConnector = -1;
+            if( bGoLast )
+            {
+                std::rotate( m_UpdaterSystems.begin() + ci,                m_UpdaterSystems.begin() + ci + 1,                m_UpdaterSystems.end() );
+                std::rotate( m_Events.m_OnUpdate.m_Delegates.begin() + ci, m_Events.m_OnUpdate.m_Delegates.begin() + ci + 1, m_Events.m_OnUpdate.m_Delegates.end() );
+            }
+            return true;
+        }
+
+        const int pi = IndexOf(Parent);
+        if( pi < 0 ) return false;
+        auto& ParentSystem = *m_UpdaterSystems[pi].second;
+        if( ConnectorIndex < 0 || ConnectorIndex >= static_cast<int>(ParentSystem.m_Connectors.size()) ) return false;
+
+        for( const xecs::system::instance* p = &ParentSystem; p; p = p->m_pParent )     // a system cannot be its own ancestor
+            if( p == &ChildSystem ) return false;
+
+        ChildSystem.m_pParent          = &ParentSystem;
+        ChildSystem.m_ParentConnector  = ConnectorIndex;
+
+        if( bGoLast )                                                   // last among the children of that connector (the end of the list)
+        {
+            std::rotate( m_UpdaterSystems.begin() + ci,                m_UpdaterSystems.begin() + ci + 1,                m_UpdaterSystems.end() );
+            std::rotate( m_Events.m_OnUpdate.m_Delegates.begin() + ci, m_Events.m_OnUpdate.m_Delegates.begin() + ci + 1, m_Events.m_OnUpdate.m_Delegates.end() );
+        }
+        return true;
+    }
+
+    //---------------------------------------------------------------------------
+
+    void mgr::RunChildren( const xecs::system::instance& Parent, int ConnectorIndex ) noexcept
+    {
+        for( std::size_t i = 0; i < m_UpdaterSystems.size(); ++i )
+        {
+            const auto& S = *m_UpdaterSystems[i].second;
+            if( S.m_pParent != &Parent || S.m_ParentConnector != ConnectorIndex ) continue;
+            const auto& D = m_Events.m_OnUpdate.m_Delegates[i];
+            if( D.m_bEnabled ) D.m_pCallback(D.m_pClass);
+        }
+    }
+
+    //---------------------------------------------------------------------------
+
+    std::span<const connector> mgr::GetConnectors( type::guid Guid ) const noexcept
+    {
+        for( auto& S : m_UpdaterSystems )
+            if( S.first->m_Guid == Guid ) return S.second->m_Connectors;
+        return {};
+    }
+}
+
+namespace xecs::system
+{
+    inline void instance::RunConnector( int ConnectorIndex ) noexcept
+    {
+        m_GameMgr.m_SystemMgr.RunChildren( *this, ConnectorIndex );
     }
 }

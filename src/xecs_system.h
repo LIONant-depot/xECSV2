@@ -1,5 +1,21 @@
 namespace xecs::system
 {
+    struct mgr;
+
+    // A connector is a place on a system where other systems can be connected: its children. The parent system decides when its children run
+    // (system::instance::RunConnector) and how many times, they run in the order they have in the system manager. A system names its connectors
+    // and says what each one is for, so the person building the hierarchy in the editor knows what they are:
+    //
+    //      static constexpr std::array<xecs::system::connector, 1> connectors_v { { { "Before Step", "Runs once for every step, right before it" } } };
+    //
+    // Which system is connected to which connector is DATA (xecs::system::mgr::Save/Load, edited in the System Registry): a system nobody connected
+    // runs at the top level, in the order it was registered.
+    struct connector
+    {
+        const char* m_pName;
+        const char* m_pDescription;
+    };
+
     namespace type
     {
         using guid = xresource::guid<struct system_tag>;
@@ -398,9 +414,20 @@ namespace xecs::system
         const xecs::component::share_filter*
                                             findShareFilter         ( xecs::component::type::share::key Key
                                                                     ) noexcept;
+        // The connectors of this system (empty when it has none), and what is connected to them: a system that is connected is not run by the
+        // frame, its parent runs it. isConnected() tells a system which of the two it is.
+        [[nodiscard]] std::span<const connector>    getConnectors           ( void ) const noexcept { return m_Connectors; }
+        [[nodiscard]] bool                          isConnected             ( void ) const noexcept { return m_pParent != nullptr; }
+        // Runs the children of one of the connectors of THIS system, in order (a child that is disabled is skipped).
+        inline void                                 RunConnector            ( int ConnectorIndex ) noexcept;
+
     private:
 
         xecs::game_mgr::instance&   m_GameMgr;
+        std::span<const connector>  m_Connectors    {};
+        xecs::system::instance*     m_pParent       = nullptr;      // the system this one is connected to, and the connector of it
+        int                         m_ParentConnector = -1;
+        friend struct xecs::system::mgr;
 
         template< typename T_USER_SYSTEM >
         requires( std::derived_from< T_USER_SYSTEM, xecs::system::instance > )
