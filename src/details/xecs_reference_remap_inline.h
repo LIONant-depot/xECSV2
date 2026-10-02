@@ -646,6 +646,68 @@ namespace xecs::persist::details
         if( RootIt == GameMgr.m_PrefabMgr.m_PrefabList.end() )
             return xerr::create<xecs::game_mgr::state::FAILURE, "ApplyInstanceOverridesToPrefab: source prefab root not resolved">();
 
+        // Components the instance root gained or lost relative to the prefab's root become the prefab's own (Unity's Apply also carries
+        // added/removed components). Compared live rather than read from PI.m_ComponentDiffs, which is only rebuilt when the instance is saved.
+        // The structural/engine components are never carried over, and neither are builder components (they are consumed when an entity is
+        // created, so a live instance does not carry them). AddOrRemoveComponents keeps the entity handle, so the prefab group's bookkeeping
+        // (m_PrefabList, m_PrefabGroups) stays valid.
+        {
+            const auto IsStructural = []( const xecs::component::type::info& Info ) noexcept
+            {
+                return xecs::component::type::IsComponentType<xecs::component::entity>(&Info)
+                    || xecs::component::type::IsComponentType<xecs::component::parent>(&Info)
+                    || xecs::component::type::IsComponentType<xecs::component::children>(&Info)
+                    || xecs::component::type::IsComponentType<xecs::editor::prefab_instance>(&Info)
+                    || xecs::component::type::IsComponentType<xecs::prefab::root>(&Info)
+                    || xecs::component::type::IsComponentType<xecs::prefab::tag>(&Info)
+                    || Info.m_bBuilder;
+            };
+            const auto Gather = [&]( xecs::component::entity Entity ) noexcept
+            {
+                auto& Archetype = *GameMgr.m_ComponentMgr.getEntityDetails(Entity).m_pPool->m_pArchetype;
+                std::vector<const xecs::component::type::info*> Infos;
+                for( auto p : Archetype.getDataComponentInfos()  ) Infos.push_back(p);
+                for( auto p : Archetype.getShareComponentInfos() ) Infos.push_back(p);
+                AppendPersistentTagInfos( Archetype, Infos );
+                return Infos;
+            };
+            const auto Has = []( const std::vector<const xecs::component::type::info*>& Infos, const xecs::component::type::info& Info ) noexcept
+            {
+                return std::any_of( Infos.begin(), Infos.end(), [&]( auto p ) noexcept { return p->m_Guid == Info.m_Guid; } );
+            };
+
+            const auto InstInfos = Gather(PIRootEntity);
+            const auto PrefInfos = Gather(RootIt->second);
+            std::vector<const xecs::component::type::info*> Add, Sub;
+            for( auto p : InstInfos ) if( !IsStructural(*p) && !Has(PrefInfos, *p) ) Add.push_back(p);
+            for( auto p : PrefInfos ) if( !IsStructural(*p) && !Has(InstInfos, *p) ) Sub.push_back(p);
+
+            if( !Add.empty() || !Sub.empty() )
+            {
+                const auto Moved = GameMgr.AddOrRemoveComponents( RootIt->second, { Add.data(), Add.size() }, { Sub.data(), Sub.size() } );
+                if( Moved.isZombie() || Moved.m_Value != RootIt->second.m_Value )
+                    return xerr::create<xecs::game_mgr::state::FAILURE, "ApplyInstanceOverridesToPrefab: could not add/remove the components on the prefab root">();
+
+                // The new components start default constructed: give them the instance's values.
+                for( auto pInfo : Add )
+                {
+                    if( pInfo->m_TypeID == xecs::component::type::id::TAG ) continue;
+                    auto* pSrc = ResolveLiveComponentPointer( GameMgr, PIRootEntity, *pInfo );
+                    if( pSrc == nullptr ) continue;
+                    if( pInfo->m_TypeID == xecs::component::type::id::SHARE )
+                    {
+                        GameMgr.ReinternShareComponent( RootIt->second, *pInfo, pSrc );
+                        continue;
+                    }
+                    auto* pDst = ResolveLiveComponentPointer( GameMgr, RootIt->second, *pInfo );
+                    if( pDst == nullptr ) continue;
+                    if( pInfo->m_pCopyFn ) pInfo->m_pCopyFn( pDst, pSrc );
+                    else                   std::memcpy( pDst, pSrc, pInfo->m_Size );
+                }
+            }
+            PI.m_ComponentDiffs.clear();
+        }
+
         for( auto& CompOverride : PI.m_lComponents )
         {
             auto* pOwnerInfo = xecs::component::mgr::findComponentTypeInfo( xecs::component::type::guid{CompOverride.m_ComponentTypeGuid} );
