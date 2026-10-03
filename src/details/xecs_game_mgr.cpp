@@ -461,6 +461,14 @@ namespace xecs::game_mgr
                 // Create a family in case of reading
                 if(isRead)
                 {
+                    // The guid of a family with shares is made from the guid of its archetype and the keys of its shares. The archetype guid comes from the bit ids of its components, which are
+                    // not the ones of the world that saved this (a reload that adds or removes a component of the game moves them): the saved guid is not this world's, so it is made again.
+                    if( nShareTypes )
+                    {
+                        FamilyGuid = xecs::pool::family::guid{ pArchetype->m_Guid.m_Value };
+                        for( int i = 0; i < nShareTypes; ++i ) FamilyGuid.m_Value += ShareKeys[i].m_Value;
+                    }
+
                     // TODO: Make sure the order of families match the saved order in memory
                     //      To do that we need to fix the link list of pending families
                     pF = &pArchetype->CreateNewPoolFamily
