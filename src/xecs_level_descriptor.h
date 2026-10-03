@@ -13,7 +13,7 @@ namespace xecs::level
 
         XPROPERTY_VDEF
         ( "Level", descriptor
-        , obj_member<"Scenes", &descriptor::m_Scenes>
+        , obj_member<"Scenes", &descriptor::m_Scenes, member_flags<flags::SHOW_READONLY>, member_help<"The Scenes of this Level. Add and remove them in the Level Tree (AddScene / RemoveScene), which keeps the open Level in step.">>
         , obj_member<"Game",   &descriptor::m_Game, member_help<"The Game (the script modules and systems) this Level runs under. Empty: the project's own Game.">>
         )
     };
