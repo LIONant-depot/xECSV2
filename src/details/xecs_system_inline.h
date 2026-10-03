@@ -479,7 +479,7 @@ instance::Foreach
     ( xecs::tools::assert_standard_function_v<T_FUNCTION>
       && (false == xecs::tools::function_has_share_component_args_v<T_FUNCTION>)
     ) __inline
-    bool instance::findEntity
+    xecs::component::entity instance::findEntity
     ( xecs::component::entity Entity
     , T_FUNCTION&&            Function
     ) noexcept

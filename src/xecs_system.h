@@ -351,7 +351,8 @@ namespace xecs::system
         ( xecs::tools::assert_standard_function_v<T_FUNCTION>
           && (false == xecs::tools::function_has_share_component_args_v<T_FUNCTION>)
         ) __inline
-        [[nodiscard]] bool                  findEntity              ( xecs::component::entity Entity
+        [[nodiscard]] xecs::component::entity
+                                            findEntity              ( xecs::component::entity Entity
                                                                     , T_FUNCTION&&            Function = xecs::tools::empty_lambda{}
                                                                     ) noexcept;
         __inline
@@ -418,6 +419,8 @@ namespace xecs::system
         // frame, its parent runs it. isConnected() tells a system which of the two it is.
         [[nodiscard]] std::span<const connector>    getConnectors           ( void ) const noexcept { return m_Connectors; }
         [[nodiscard]] bool                          isConnected             ( void ) const noexcept { return m_pParent != nullptr; }
+        // The game manager this system belongs to: for what the system's own functions do not forward (the user data of the game, a function that takes the manager).
+        [[nodiscard]] xecs::game_mgr::instance&     getGameMgr              ( void ) const noexcept { return m_GameMgr; }
         // Runs the children of one of the connectors of THIS system, in order (a child that is disabled is skipped).
         inline void                                 RunConnector            ( int ConnectorIndex ) noexcept;
 
