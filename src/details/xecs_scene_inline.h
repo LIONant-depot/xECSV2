@@ -434,9 +434,13 @@ namespace xecs::scene
         // The authoritative "these ids are still valid" list the next load will read (see
         // descriptor::m_ActiveEntities's own comment) - exactly the currently-live entities, sorted
         // for a stable, diffable file rather than unordered_map's arbitrary iteration order.
-        Descriptor.m_ActiveEntities.reserve(pScene->m_LocalToRuntime.size());
+        Descriptor.m_ActiveEntities.reserve(pScene->m_LocalToRuntime.size() + pScene->m_UnloadedEntities.size());
         for( auto& Pair : pScene->m_LocalToRuntime )
             Descriptor.m_ActiveEntities.push_back(Pair.first);
+        // The entities that could not be loaded are still the scene's: forgetting them here would unlink their files for good (the next load only reads what this list names).
+        for( auto Id : pScene->m_UnloadedEntities )
+            if( pScene->m_LocalToRuntime.find(Id) == pScene->m_LocalToRuntime.end() )
+                Descriptor.m_ActiveEntities.push_back(Id);
         std::sort(Descriptor.m_ActiveEntities.begin(), Descriptor.m_ActiveEntities.end());
 
         // Written to a temp file + atomic rename over the real path, closing one of the two
@@ -570,11 +574,11 @@ namespace xecs::scene
     // consumer for the full design ("component-registry compatibility" plan).
     //-----------------------------------------------------------------------------------------------
     inline
-    xerr mgr::SaveSceneComponentDependencies( guid SceneGuid ) noexcept
+    std::vector<component_dependency> mgr::CollectSceneComponentDependencies( guid SceneGuid ) const noexcept
     {
-        auto* pScene = Find(SceneGuid);
-        if( pScene == nullptr )
-            return xerr::create<xecs::game_mgr::state::FAILURE, "SaveSceneComponentDependencies: scene is not registered - call FindOrCreate first">();
+        std::vector<component_dependency> Result;
+        auto* pScene = const_cast<mgr*>(this)->Find(SceneGuid);
+        if( pScene == nullptr ) return Result;
 
         std::vector<const xecs::archetype::instance*>   SeenArchetypes;
         std::vector<const xecs::component::type::info*> UsedInfos;
@@ -598,6 +602,32 @@ namespace xecs::scene
         // use in SaveSceneDescriptor above.
         std::sort( UsedInfos.begin(), UsedInfos.end(), []( auto* A, auto* B ) noexcept { return A->m_Guid.m_Value < B->m_Guid.m_Value; } );
 
+        Result.reserve(UsedInfos.size());
+        for( auto* pInfo : UsedInfos )
+            Result.push_back( { pInfo->m_Guid, pInfo->m_pName, m_pModuleOfComponent ? m_pModuleOfComponent(pInfo->m_Guid) : unknown_module_v } );
+        return Result;
+    }
+
+    inline
+    xerr mgr::SaveSceneComponentDependencies( guid SceneGuid ) noexcept
+    {
+        if( Find(SceneGuid) == nullptr )
+            return xerr::create<xecs::game_mgr::state::FAILURE, "SaveSceneComponentDependencies: scene is not registered - call FindOrCreate first">();
+
+        auto Deps = CollectSceneComponentDependencies(SceneGuid);
+
+        // The components that the entities which could not be loaded need are not in any live archetype: keep what the file said about the ones the registry does not know now (a game module that
+        // is not loaded), so that the file still says what the scene needs.
+        if( !Find(SceneGuid)->m_UnloadedEntities.empty() )
+        {
+            for( auto& Old : LoadSceneComponentDependencies( std::wstring_view(m_ProjectPath), SceneGuid ) )
+            {
+                const bool bLive = std::any_of( Deps.begin(), Deps.end(), [&]( const component_dependency& D ) noexcept { return D.m_Guid.m_Value == Old.m_Guid.m_Value; } );
+                if( !bLive && m_GameMgr.m_ComponentMgr.findComponentTypeInfo(Old.m_Guid) == nullptr ) Deps.push_back(std::move(Old));
+            }
+            std::sort( Deps.begin(), Deps.end(), []( const component_dependency& A, const component_dependency& B ) noexcept { return A.m_Guid.m_Value < B.m_Guid.m_Value; } );
+        }
+
         const auto RealPath = details::ComponentDepsPath(*this, SceneGuid);
         const auto TempPath = RealPath + L".tmp";
 
@@ -614,13 +644,15 @@ namespace xecs::scene
                 return Err;
 
             if( auto Err = TextFile.Record( "ComponentDeps"
-            ,   [&]( std::size_t& C, xerr& ) noexcept { C = UsedInfos.size(); }
+            ,   [&]( std::size_t& C, xerr& ) noexcept { C = Deps.size(); }
             ,   [&]( std::size_t i, xerr& Error ) noexcept
                 {
-                    std::uint64_t V    = UsedInfos[i]->m_Guid.m_Value;
-                    std::string   Name = UsedInfos[i]->m_pName;
-                      (Error = TextFile.Field("Guid", V))
-                    ||(Error = TextFile.Field("Name", Name));
+                    std::uint64_t V      = Deps[i].m_Guid.m_Value;
+                    std::string   Name   = Deps[i].m_Name;
+                    std::uint64_t Module = Deps[i].m_Module;
+                      (Error = TextFile.Field("Guid",   V))
+                    ||(Error = TextFile.Field("Name",   Name))
+                    ||(Error = TextFile.Field("Module", Module));
                 }
             ); Err )
                 return Err;
@@ -664,6 +696,11 @@ namespace xecs::scene
                   (Error = TextFile.Field("Guid", V))
                 ||(Error = TextFile.Field("Name", Entry.m_Name));
                 Entry.m_Guid = xecs::component::type::guid{V};
+
+                // A file written before modules were tracked has no Module column: that is not an error, the component's module is just unknown.
+                // Read apart from Error so that the missing column does not end the record.
+                std::uint64_t Module = unknown_module_v;
+                if( auto ModuleErr = TextFile.Field("Module", Module); !ModuleErr ) Entry.m_Module = Module;
                 Result.push_back(std::move(Entry));
             }
         );
@@ -931,6 +968,7 @@ namespace xecs::scene
             }
 
             Scene.m_State = state::LoadingEntities;
+            Scene.m_UnloadedEntities.clear();
 
             // 1) Read every entity into staging.
             std::vector<staged_entity>                     StagedEntities;
@@ -950,6 +988,7 @@ namespace xecs::scene
                     // error, rather than silently loading a wrong entity.
                     std::printf("[Scene::EnsureLoaded] WARNING: entity Id=%u failed to load (%s) - skipping it, scene will load without it\n", Id, std::string(Err.getMessage()).c_str());
                     std::fflush(stdout);
+                    Scene.m_UnloadedEntities.push_back(Id);                     // not in the world, but still the scene's: see instance::m_UnloadedEntities
                     continue;
                 }
                 StagedIndex[Staged.m_Id] = StagedEntities.size();

@@ -124,6 +124,11 @@ namespace xecs::scene
         // Entity display names (see entity_name) - live map, copied to/from descriptor::m_EntityNames on save/load.
         std::unordered_map<permanent_id, std::string> m_EntityNames;
 
+        // Entities the descriptor lists that could not be loaded (their file is unreadable, or a component of theirs is not registered: the game module that defines it is not loaded).
+        // They are not in the world, but they are still the scene's: a Save keeps them in m_ActiveEntities and keeps the components they need in ComponentDeps.txt, instead of
+        // silently forgetting them (the entity file stays on disk, and the next load with the right game module brings them back).
+        std::vector<permanent_id>                   m_UnloadedEntities;
+
         // Residency. A scene is unloadable only when both are zero.
         int                                         m_ExplicitRequests    = 0;
         int                                         m_DependentSceneCount = 0;
@@ -181,6 +186,12 @@ namespace xecs::scene
         guid m_SceneGuid;
     };
 
+    // The module a component belongs to, in a scene's ComponentDeps.txt: the guid of the script module (ScriptModule resource) that defines it, 0 for the engine's and the editor's own
+    // components (they belong to no module), and this when nobody could say (the file was written before modules were tracked, or the game module was not loaded when it was saved).
+    inline constexpr std::uint64_t unknown_module_v = ~0ull;
+
+    struct component_dependency;
+
     struct mgr
     {
         mgr( xecs::game_mgr::instance& GameMgr ) noexcept : m_GameMgr{ GameMgr } {}
@@ -218,6 +229,11 @@ namespace xecs::scene
         // needs to force-regenerate it without a full scene save.
         inline
         xerr        SaveSceneComponentDependencies ( guid SceneGuid ) noexcept;
+
+        // The component types the scene's live entities use (guid, name, module), sorted by guid: what SaveSceneComponentDependencies writes, from the live archetypes - for the checks
+        // that must not read a file that is older than the scene in memory. The module of each comes from m_pModuleOfComponent.
+        inline
+        std::vector<component_dependency> CollectSceneComponentDependencies ( guid SceneGuid ) const noexcept;
 
         // The actual "Save this scene" entry point: resolves instance::m_PendingChanges (see its own
         // comment) into actual disk writes/deletes via SaveEntity, each sanity-checked against whether
@@ -259,6 +275,10 @@ namespace xecs::scene
         // and entity_db folders are computed from this using the real GUID-sharded
         // Descriptors/Scene/<b0>/<b1>/<guid>.desc/ convention every other resource type uses.
         std::wstring                              m_ProjectPath;
+
+        // Says which module defines a component (see unknown_module_v). Set by the host that knows (the editor, from the game DLL's registrations); xECSV2 itself knows nothing of modules.
+        // Null: every component is unknown_module_v.
+        std::uint64_t                           (*m_pModuleOfComponent)( xecs::component::type::guid ) noexcept = nullptr;
     };
 
     // One entry of a scene's ComponentDeps.txt manifest (see SaveSceneComponentDependencies/
@@ -270,6 +290,7 @@ namespace xecs::scene
     {
         xecs::component::type::guid m_Guid {};
         std::string                 m_Name {};
+        std::uint64_t               m_Module = unknown_module_v;        // the script module that defines it (0: none, it is the engine's or the editor's)
     };
 
     // Standalone read of a scene's dependency manifest - no game_mgr::instance, no entity/archetype
