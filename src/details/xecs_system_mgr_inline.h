@@ -362,6 +362,31 @@ namespace xecs::system
         if( false == std::filesystem::exists(ConfigFolder) )
             std::filesystem::create_directories(ConfigFolder);
 
+        // The systems of a Game that is not the one loaded now are not in m_UpdaterSystems: their entries in the file are not ours to erase (the project's Games share this file, and the
+        // editor switches Games). Keep each one right after the entry that came before it in the old file and is still here (at the front when none), so the order around it is as it was.
+        {
+            xtextfile::stream OldStream;
+            system_order_config Old;
+            xproperty::settings::context OldContext;
+            if( !OldStream.Open(true, std::format(L"{}\\SystemOrder.config.txt", ConfigFolder), { xtextfile::file_type::TEXT })
+                && !xproperty::sprop::serializer::Stream( OldStream, Old, OldContext ) )
+            {
+                auto IndexOf = [&]( std::uint64_t Guid ) noexcept
+                {
+                    for( std::size_t k = 0; k < Config.m_UpdateOrder.size(); ++k )
+                        if( Config.m_UpdateOrder[k].m_Guid == Guid ) return static_cast<int>(k);
+                    return -1;
+                };
+                int InsertAt = 0;
+                for( auto& Entry : Old.m_UpdateOrder )
+                {
+                    if( const int Live = IndexOf(Entry.m_Guid); Live >= 0 ) { InsertAt = Live + 1; continue; }
+                    Config.m_UpdateOrder.insert( Config.m_UpdateOrder.begin() + InsertAt, Entry );
+                    ++InsertAt;
+                }
+            }
+        }
+
         xtextfile::stream Stream;
         if( auto Err = Stream.Open(false, std::format(L"{}\\SystemOrder.config.txt", ConfigFolder), { xtextfile::file_type::TEXT }); Err )
             return Err;
