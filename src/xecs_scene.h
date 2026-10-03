@@ -278,7 +278,8 @@ namespace xecs::scene
 
         // Says which module defines a component (see unknown_module_v). Set by the host that knows (the editor, from the game DLL's registrations); xECSV2 itself knows nothing of modules.
         // Null: every component is unknown_module_v.
-        std::uint64_t                           (*m_pModuleOfComponent)( xecs::component::type::guid ) noexcept = nullptr;
+        std::uint64_t                           (*m_pModuleOfComponent)( void* pUser, xecs::component::type::guid ) noexcept = nullptr;
+        void*                                   m_pModuleOfComponentUser = nullptr;       // given back to m_pModuleOfComponent: what says the module is the world's own (a Level has its own game module)
     };
 
     // One entry of a scene's ComponentDeps.txt manifest (see SaveSceneComponentDependencies/

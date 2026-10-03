@@ -604,7 +604,7 @@ namespace xecs::scene
 
         Result.reserve(UsedInfos.size());
         for( auto* pInfo : UsedInfos )
-            Result.push_back( { pInfo->m_Guid, pInfo->m_pName, m_pModuleOfComponent ? m_pModuleOfComponent(pInfo->m_Guid) : unknown_module_v } );
+            Result.push_back( { pInfo->m_Guid, pInfo->m_pName, m_pModuleOfComponent ? m_pModuleOfComponent(m_pModuleOfComponentUser, pInfo->m_Guid) : unknown_module_v } );
         return Result;
     }
 
