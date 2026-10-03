@@ -9,10 +9,12 @@ namespace xecs::level
         void Validate       ( std::vector<std::string>& ) const noexcept override {}
 
         std::vector<xecs::scene::guid>   m_Scenes = {};
+        game_ref                         m_Game   = {};       // the Game this Level runs under: empty is the project's Game
 
         XPROPERTY_VDEF
         ( "Level", descriptor
         , obj_member<"Scenes", &descriptor::m_Scenes>
+        , obj_member<"Game",   &descriptor::m_Game, member_help<"The Game (the script modules and systems) this Level runs under. Empty: the project's own Game.">>
         )
     };
     XPROPERTY_VREG(descriptor)

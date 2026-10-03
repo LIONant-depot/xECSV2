@@ -59,7 +59,9 @@ namespace xecs::level
             if( false == std::filesystem::exists(details::LevelFolder(*this, LevelGuid) + L"/info.txt", Ec) || Ec )
                 return xerr::create<xecs::game_mgr::state::FAILURE, "Level::mgr::Load: level descriptor not found">();
 
-            FindOrCreate(LevelGuid).m_Scenes.clear();
+            auto& Fresh = FindOrCreate(LevelGuid);
+            Fresh.m_Scenes.clear();
+            Fresh.m_Game = {};
             return {};
         }
 
@@ -71,6 +73,7 @@ namespace xecs::level
             return Err;
 
         Level.m_Scenes = std::move(Descriptor.m_Scenes);
+        Level.m_Game   = Descriptor.m_Game;
         return {};
     }
 
@@ -87,6 +90,7 @@ namespace xecs::level
 
         descriptor Descriptor;
         Descriptor.m_Scenes = pLevel->m_Scenes;
+        Descriptor.m_Game   = pLevel->m_Game;
 
         xproperty::settings::context Context;
         return Descriptor.Serialize( false, details::DescriptorPath(*this, LevelGuid), Context );

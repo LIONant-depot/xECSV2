@@ -6,11 +6,16 @@ namespace xecs::level
     inline constexpr auto type_guid_v = xresource::type_guid(xresource::guid_generator::Instance64FromString("Level"));
     using guid = xresource::def_guid<type_guid_v>;
 
+    // The Game a Level runs under (a Game resource, see plugins/xgame.plugin: it must match that plugin's TypeGUID). Empty: the project's own Game.
+    inline constexpr auto game_type_guid_v = xresource::type_guid(0xA3F1D6C0452E9B17ull);
+    using game_ref = xresource::def_guid<game_type_guid_v>;
+
     struct instance
     {
         guid                            m_Guid;
         std::string                     m_Name;
         std::vector<xecs::scene::guid>  m_Scenes;
+        game_ref                        m_Game;         // the Game this Level runs under (empty: the project's Game). Saved with the Level: a Save writes a fresh descriptor from this.
     };
 
     struct mgr
