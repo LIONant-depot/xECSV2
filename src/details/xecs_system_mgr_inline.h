@@ -51,7 +51,11 @@ namespace xecs::system
         //
         auto& System = *static_cast<real_system*>([&]
         {
-            if constexpr( real_system::typedef_v.is_notifier_v )
+            // The systems that run when something happens (an archetype event, a global event, an event of another system) are the notifiers: only the update systems have an
+            // update delegate, and the saved order (Load) and the System Registry index m_UpdaterSystems and that delegate list together.
+            if constexpr( real_system::typedef_v.is_notifier_v
+                       || real_system::typedef_v.id_v == type::id::GLOBAL_EVENT
+                       || real_system::typedef_v.id_v == type::id::SYSTEM_EVENT )
             {
                 m_NotifierSystems.push_back({ &type::info_v<T_SYSTEM>, std::make_unique< real_system >(GameMgr) });
                 return m_NotifierSystems.back().second.get();
@@ -130,8 +134,8 @@ namespace xecs::system
         // NOTE: that this requires all the relevant events to be register before our system delegate
         if constexpr (real_system::typedef_v.id_v == type::id::GLOBAL_EVENT )
         {
-            GameMgr.m_EventMgr.getEvent< typedef_t::event_t >()
-                .Register<&T_SYSTEM::OnEvent>( GameMgr.getSystem< T_SYSTEM >() );
+            GameMgr.m_EventMgr.template getEvent< typename typedef_t::event_t >()
+                .template Register<&T_SYSTEM::OnEvent>( GameMgr.template getSystem< T_SYSTEM >() );
         }
 
         //
