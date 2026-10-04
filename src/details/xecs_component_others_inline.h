@@ -9,7 +9,8 @@ namespace xecs::component
 
     xerr parent::Serialize( xecs::serializer::stream& TextFile, bool ) noexcept
     {
-        return TextFile.Field("Parent", m_Value );
+        if( auto Err = TextFile.Field("Parent", m_Value ); Err ) return Err;
+        return TextFile.Field("Follow", m_Follow);
     }
 
     //----------------------------------------------------------------------------------------------------

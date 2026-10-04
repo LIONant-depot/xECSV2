@@ -22,6 +22,13 @@ namespace xecs::component
                                            ~global_info_mgr     ( void ) noexcept;
             inline
             void                            Initialize          ( int LastKnownSceneRanged ) noexcept;
+            // Whether the handle still names the entity it was made for (false for an entity that was deleted, a zombie that is waiting for the end of the frame, and a recycled slot).
+            // Unlike getEntityDetails it never asserts: it is what a list of entity references (children) is checked with before it is used.
+            bool                            isEntityValid       ( xecs::component::entity Entity ) const noexcept
+            {
+                return Entity.isValid() && m_pGlobalInfo && m_pGlobalInfo[Entity.m_GlobalInfoIndex].m_Validation == Entity.m_Validation;
+            }
+
             inline
             entity::global_info&            getEntityDetails    ( xecs::component::entity Entity ) noexcept;
             inline
@@ -98,6 +105,7 @@ namespace xecs::component
         )
         void                                RegisterComponent       ( xecs::plugin::token Owner = xecs::plugin::host_v
                                                                     ) noexcept;
+        bool                                isEntityValid           ( xecs::component::entity Entity ) const noexcept { return m_GlobalEntityInfos.isEntityValid(Entity); }
         inline
         const entity::global_info&          getEntityDetails        ( xecs::component::entity Entity 
                                                                     ) const noexcept;

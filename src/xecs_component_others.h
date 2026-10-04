@@ -53,6 +53,15 @@ namespace xecs::component
     //
     // Parent component for hierarchical entities, used only for entities that have parents (not root entities).
     //
+    // An entity with a parent is a CHILD: its Transform is relative to the parent (an entity without one is a root, and its Transform is the world pose).
+    // The component also keeps what the engine derived from that every frame: the child's WORLD pose (position, rotation, scale; see the transform system of the engine). It is
+    // never saved, never shown, and always valid (it is the pose of the last time the transform system ran). Anything that needs the world position of an entity that may be a
+    // child asks the parent component when there is one, and the Transform when there is not (xlioncore::WorldOf does exactly that).
+    //
+    // m_Follow says what the child takes from its parent: the three position axes, the rotation and the scale. A channel that does not follow takes the child's own value as a
+    // WORLD value (a shadow follows x and z and stays on the ground: it does not follow y). By default everything follows except the scale: in this engine the scale of an entity
+    // is also its size, and a name tag over a player must not be squashed by the player.
+    //
     struct parent
     {
         constexpr static auto typedef_v = xecs::component::type::data
@@ -60,14 +69,35 @@ namespace xecs::component
             .m_pName                = "Parent"
         };
 
+        enum follow : std::uint8_t
+        { FOLLOW_X         = 1 << 0
+        , FOLLOW_Y         = 1 << 1
+        , FOLLOW_Z         = 1 << 2
+        , FOLLOW_ROTATION  = 1 << 3
+        , FOLLOW_SCALE     = 1 << 4
+        , FOLLOW_DEFAULT   = FOLLOW_X | FOLLOW_Y | FOLLOW_Z | FOLLOW_ROTATION
+        };
+
         inline xerr Serialize( xecs::serializer::stream&, bool ) noexcept;
         inline void       ReportReferences(std::vector<xecs::component::entity*>& ) noexcept;
 
         xecs::component::entity m_Value;
+        std::uint8_t            m_Follow = FOLLOW_DEFAULT;
+
+        // Derived, not saved: the world pose of this entity as the transform system left it (x y z w for each; the position and the scale use xyz). Plain floats: this
+        // library does not know the math of the engine.
+        alignas(16) float       m_WorldPosition[4] = { 0, 0, 0, 0 };
+        alignas(16) float       m_WorldRotation[4] = { 0, 0, 0, 1 };
+        alignas(16) float       m_WorldScale   [4] = { 1, 1, 1, 0 };
 
         XPROPERTY_DEF
         ( "Parent", parent
         , obj_member<"Parent", &parent::m_Value>
+        , obj_member<"FollowX",        +[](parent& O, bool bRead, bool& V){ if (bRead) V = (O.m_Follow & FOLLOW_X) != 0;        else O.m_Follow = static_cast<std::uint8_t>(V ? (O.m_Follow | FOLLOW_X)        : (O.m_Follow & ~FOLLOW_X));        }, member_help<"The child takes the x of its parent's position. Off: its own x is a world x.">>
+        , obj_member<"FollowY",        +[](parent& O, bool bRead, bool& V){ if (bRead) V = (O.m_Follow & FOLLOW_Y) != 0;        else O.m_Follow = static_cast<std::uint8_t>(V ? (O.m_Follow | FOLLOW_Y)        : (O.m_Follow & ~FOLLOW_Y));        }, member_help<"The child takes the y of its parent's position. Off: its own y is a world y (a shadow stays on the ground).">>
+        , obj_member<"FollowZ",        +[](parent& O, bool bRead, bool& V){ if (bRead) V = (O.m_Follow & FOLLOW_Z) != 0;        else O.m_Follow = static_cast<std::uint8_t>(V ? (O.m_Follow | FOLLOW_Z)        : (O.m_Follow & ~FOLLOW_Z));        }, member_help<"The child takes the z of its parent's position. Off: its own z is a world z.">>
+        , obj_member<"FollowRotation", +[](parent& O, bool bRead, bool& V){ if (bRead) V = (O.m_Follow & FOLLOW_ROTATION) != 0; else O.m_Follow = static_cast<std::uint8_t>(V ? (O.m_Follow | FOLLOW_ROTATION) : (O.m_Follow & ~FOLLOW_ROTATION)); }, member_help<"The child turns with its parent, and its offset turns with it. Off: its own rotation is a world rotation.">>
+        , obj_member<"FollowScale",    +[](parent& O, bool bRead, bool& V){ if (bRead) V = (O.m_Follow & FOLLOW_SCALE) != 0;    else O.m_Follow = static_cast<std::uint8_t>(V ? (O.m_Follow | FOLLOW_SCALE)    : (O.m_Follow & ~FOLLOW_SCALE));    }, member_help<"The child is scaled by its parent. Off (the default): the scale of the parent is its size, not the child's.">>
         )
     };
 
