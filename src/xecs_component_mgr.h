@@ -22,11 +22,16 @@ namespace xecs::component
                                            ~global_info_mgr     ( void ) noexcept;
             inline
             void                            Initialize          ( int LastKnownSceneRanged ) noexcept;
-            // Whether the handle still names the entity it was made for (false for an entity that was deleted, a zombie that is waiting for the end of the frame, and a recycled slot).
-            // Unlike getEntityDetails it never asserts: it is what a list of entity references (children) is checked with before it is used.
+            // Whether the handle names a LIVE entity that it was made for: false for an entity that was deleted, a zombie that is waiting for the end of the frame, a recycled slot, a slot
+            // nobody lives in (no pool: a free slot has the same validation as a handle that was never an entity), a handle outside the slots that exist, and a reference that is not
+            // resolved yet (a level that is still loading: its children are still the ids of the file). Unlike getEntityDetails it never asserts: it is what a list of entity references
+            // (children) is checked with before it is used.
             bool                            isEntityValid       ( xecs::component::entity Entity ) const noexcept
             {
-                return Entity.isValid() && m_pGlobalInfo && m_pGlobalInfo[Entity.m_GlobalInfoIndex].m_Validation == Entity.m_Validation;
+                if( !Entity.isValid() || !m_pGlobalInfo ) return false;
+                if( static_cast<int>(Entity.m_GlobalInfoIndex) >= (m_LastRuntimeSubrange + 1) * xecs::component::ranges::sub_range_entity_count_v ) return false;
+                const auto& Entry = m_pGlobalInfo[Entity.m_GlobalInfoIndex];
+                return Entry.m_pPool != nullptr && Entry.m_Validation == Entity.m_Validation;
             }
 
             inline

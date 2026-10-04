@@ -59,8 +59,9 @@ namespace xecs::component
     // child asks the parent component when there is one, and the Transform when there is not (xlioncore::WorldOf does exactly that).
     //
     // m_Follow says what the child takes from its parent: the three position axes, the rotation and the scale. A channel that does not follow takes the child's own value as a
-    // WORLD value (a shadow follows x and z and stays on the ground: it does not follow y). By default everything follows except the scale: in this engine the scale of an entity
-    // is also its size, and a name tag over a player must not be squashed by the player.
+    // WORLD value (a shadow follows x and z and stays on the ground: it does not follow y). The rotation is followed whole, or only its heading (the turn around the vertical axis),
+    // or not at all. By default everything follows except the scale: in this engine the scale of an entity is also its size, and a name tag over a player must not be squashed by the
+    // player.
     //
     struct parent
     {
@@ -69,12 +70,16 @@ namespace xecs::component
             .m_pName                = "Parent"
         };
 
+        // Saved as one byte (the first five bits keep the meaning they always had: a scene saved before the scale was split by axis loads the same).
         enum follow : std::uint8_t
         { FOLLOW_X         = 1 << 0
         , FOLLOW_Y         = 1 << 1
         , FOLLOW_Z         = 1 << 2
-        , FOLLOW_ROTATION  = 1 << 3
-        , FOLLOW_SCALE     = 1 << 4
+        , FOLLOW_ROTATION  = 1 << 3     // the whole rotation of the parent
+        , FOLLOW_SCALE_X   = 1 << 4
+        , FOLLOW_SCALE_Y   = 1 << 5
+        , FOLLOW_SCALE_Z   = 1 << 6
+        , FOLLOW_HEADING   = 1 << 7     // only the turn around the vertical axis (when FOLLOW_ROTATION is off): the lean and the roll of the parent are not the child's
         , FOLLOW_DEFAULT   = FOLLOW_X | FOLLOW_Y | FOLLOW_Z | FOLLOW_ROTATION
         };
 
@@ -92,12 +97,19 @@ namespace xecs::component
 
         XPROPERTY_DEF
         ( "Parent", parent
-        , obj_member<"Parent", &parent::m_Value>
-        , obj_member<"FollowX",        +[](parent& O, bool bRead, bool& V){ if (bRead) V = (O.m_Follow & FOLLOW_X) != 0;        else O.m_Follow = static_cast<std::uint8_t>(V ? (O.m_Follow | FOLLOW_X)        : (O.m_Follow & ~FOLLOW_X));        }, member_help<"The child takes the x of its parent's position. Off: its own x is a world x.">>
-        , obj_member<"FollowY",        +[](parent& O, bool bRead, bool& V){ if (bRead) V = (O.m_Follow & FOLLOW_Y) != 0;        else O.m_Follow = static_cast<std::uint8_t>(V ? (O.m_Follow | FOLLOW_Y)        : (O.m_Follow & ~FOLLOW_Y));        }, member_help<"The child takes the y of its parent's position. Off: its own y is a world y (a shadow stays on the ground).">>
-        , obj_member<"FollowZ",        +[](parent& O, bool bRead, bool& V){ if (bRead) V = (O.m_Follow & FOLLOW_Z) != 0;        else O.m_Follow = static_cast<std::uint8_t>(V ? (O.m_Follow | FOLLOW_Z)        : (O.m_Follow & ~FOLLOW_Z));        }, member_help<"The child takes the z of its parent's position. Off: its own z is a world z.">>
-        , obj_member<"FollowRotation", +[](parent& O, bool bRead, bool& V){ if (bRead) V = (O.m_Follow & FOLLOW_ROTATION) != 0; else O.m_Follow = static_cast<std::uint8_t>(V ? (O.m_Follow | FOLLOW_ROTATION) : (O.m_Follow & ~FOLLOW_ROTATION)); }, member_help<"The child turns with its parent, and its offset turns with it. Off: its own rotation is a world rotation.">>
-        , obj_member<"FollowScale",    +[](parent& O, bool bRead, bool& V){ if (bRead) V = (O.m_Follow & FOLLOW_SCALE) != 0;    else O.m_Follow = static_cast<std::uint8_t>(V ? (O.m_Follow | FOLLOW_SCALE)    : (O.m_Follow & ~FOLLOW_SCALE));    }, member_help<"The child is scaled by its parent. Off (the default): the scale of the parent is its size, not the child's.">>
+        , obj_member<"Parent", &parent::m_Value, member_flags<flags::SHOW_READONLY>, member_help<"The entity this one belongs to. Its Transform is relative to the parent's. Made by creating the entity as a child; shown here, not edited.">>
+        , obj_scope<"FollowPosition", xproperty::settings::vector3_group
+            , obj_member<"X", +[](parent& O, bool bRead, bool& V){ if (bRead) V = (O.m_Follow & FOLLOW_X) != 0; else O.m_Follow = static_cast<std::uint8_t>(V ? (O.m_Follow | FOLLOW_X) : (O.m_Follow & ~FOLLOW_X)); }, member_flags<flags::NO_BOOL_TEXT>, member_help<"The child takes the x of its parent's position. Off: its own x is a world x.">>
+            , obj_member<"Y", +[](parent& O, bool bRead, bool& V){ if (bRead) V = (O.m_Follow & FOLLOW_Y) != 0; else O.m_Follow = static_cast<std::uint8_t>(V ? (O.m_Follow | FOLLOW_Y) : (O.m_Follow & ~FOLLOW_Y)); }, member_flags<flags::NO_BOOL_TEXT>, member_help<"The child takes the y of its parent's position. Off: its own y is a world y (a shadow stays on the ground).">>
+            , obj_member<"Z", +[](parent& O, bool bRead, bool& V){ if (bRead) V = (O.m_Follow & FOLLOW_Z) != 0; else O.m_Follow = static_cast<std::uint8_t>(V ? (O.m_Follow | FOLLOW_Z) : (O.m_Follow & ~FOLLOW_Z)); }, member_flags<flags::NO_BOOL_TEXT>, member_help<"The child takes the z of its parent's position. Off: its own z is a world z.">>
+            >
+        , obj_member<"FollowRotation", +[](parent& O, bool bRead, bool& V){ if (bRead) V = (O.m_Follow & FOLLOW_ROTATION) != 0; else O.m_Follow = static_cast<std::uint8_t>(V ? (O.m_Follow | FOLLOW_ROTATION) : (O.m_Follow & ~FOLLOW_ROTATION)); }, member_help<"The child turns with its parent, and its offset turns with it. Off: its own rotation is a world rotation (unless FollowHeading is on).">>
+        , obj_member<"FollowHeading",  +[](parent& O, bool bRead, bool& V){ if (bRead) V = (O.m_Follow & FOLLOW_HEADING) != 0;  else O.m_Follow = static_cast<std::uint8_t>(V ? (O.m_Follow | FOLLOW_HEADING)  : (O.m_Follow & ~FOLLOW_HEADING));  }, member_help<"Only when FollowRotation is off: the child takes the turn of its parent around the vertical axis (where it faces) and not its lean or roll. A name tag over a player who leans.">>
+        , obj_scope<"FollowScale", xproperty::settings::vector3_group
+            , obj_member<"X", +[](parent& O, bool bRead, bool& V){ if (bRead) V = (O.m_Follow & FOLLOW_SCALE_X) != 0; else O.m_Follow = static_cast<std::uint8_t>(V ? (O.m_Follow | FOLLOW_SCALE_X) : (O.m_Follow & ~FOLLOW_SCALE_X)); }, member_flags<flags::NO_BOOL_TEXT>, member_help<"The child is scaled by its parent's x. Off (the default): the scale of the parent is its size, not the child's.">>
+            , obj_member<"Y", +[](parent& O, bool bRead, bool& V){ if (bRead) V = (O.m_Follow & FOLLOW_SCALE_Y) != 0; else O.m_Follow = static_cast<std::uint8_t>(V ? (O.m_Follow | FOLLOW_SCALE_Y) : (O.m_Follow & ~FOLLOW_SCALE_Y)); }, member_flags<flags::NO_BOOL_TEXT>, member_help<"The child is scaled by its parent's y. Off (the default): the scale of the parent is its size, not the child's.">>
+            , obj_member<"Z", +[](parent& O, bool bRead, bool& V){ if (bRead) V = (O.m_Follow & FOLLOW_SCALE_Z) != 0; else O.m_Follow = static_cast<std::uint8_t>(V ? (O.m_Follow | FOLLOW_SCALE_Z) : (O.m_Follow & ~FOLLOW_SCALE_Z)); }, member_flags<flags::NO_BOOL_TEXT>, member_help<"The child is scaled by its parent's z. Off (the default): the scale of the parent is its size, not the child's.">>
+            >
         )
     };
 
@@ -118,7 +130,7 @@ namespace xecs::component
 
         XPROPERTY_DEF
         ( "Children", children
-        , obj_member<"Children", &children::m_List>
+        , obj_member<"Children", &children::m_List, member_flags<flags::SHOW_READONLY>, member_help<"The entities that belong to this one. Made by creating them as children; shown here, not edited.">>
         )
     };
 
