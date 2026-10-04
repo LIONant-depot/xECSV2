@@ -45,6 +45,7 @@ namespace xecs::game_mgr
     {
         m_ComponentMgr.LockComponentTypes();
         ((m_EventMgr.Register<T_GLOBAL_EVENTS>()), ...);
+        ((m_EventRecords.push_back({ xecs::event::type::info_v<T_GLOBAL_EVENTS>.m_Guid, T_GLOBAL_EVENTS::typedef_v.m_pName, T_GLOBAL_EVENTS::typedef_v.m_pHelp })), ...);
     }
 
     //---------------------------------------------------------------------------

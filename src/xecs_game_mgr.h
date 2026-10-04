@@ -277,5 +277,11 @@ namespace xecs::game_mgr
         bool                                                 m_bBuildersEnabled  = false;
         std::unordered_map<std::uint64_t, build_plan>        m_BuildPlans        {};
         std::uint32_t                                        m_BuildPlansVersion = 0;       // m_SystemMgr.m_BuilderSystemsVersion the cache was built against
+        // For the editor (the System Registry, ListEventHandlers): which global events exist (their name, what they tell and when) and which systems are event handlers. Last members of the
+        // world on purpose: a binary built before them (a Game.dll that was not rebuilt) never looks past what it knew.
+        struct event_record         { xecs::event::type::guid m_Guid; const char* m_pName; const char* m_pHelp; };
+        struct event_handler_record { const xecs::system::type::info* m_pSystem; xecs::event::type::guid m_Event; const xecs::system::type::info* m_pOwner; };   // a global event handler names its event; a system event handler names the system that owns the event
+        std::vector<event_record>                            m_EventRecords;
+        std::vector<event_handler_record>                    m_EventHandlerRecords;
     };
 }

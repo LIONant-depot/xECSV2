@@ -136,6 +136,7 @@ namespace xecs::system
         {
             GameMgr.m_EventMgr.template getEvent< typename typedef_t::event_t >()
                 .template Register<&T_SYSTEM::OnEvent>( GameMgr.template getSystem< T_SYSTEM >() );
+            GameMgr.m_EventHandlerRecords.push_back({ &type::info_v<T_SYSTEM>, xecs::event::type::info_v<typename typedef_t::event_t>.m_Guid, nullptr });
         }
 
         //
@@ -144,6 +145,7 @@ namespace xecs::system
         if constexpr (real_system::typedef_v.id_v == type::id::SYSTEM_EVENT)
         {
             static_assert( xecs::types::tuple_t2i_v<typedef_t::event_t, typedef_t::system_t::events > + 1 );
+            GameMgr.m_EventHandlerRecords.push_back({ &type::info_v<T_SYSTEM>, {}, &type::info_v<typename typedef_t::system_t> });
 
             if constexpr( xecs::types::is_specialized_v<xecs::system::type::child_update, typedef_t > )
             {

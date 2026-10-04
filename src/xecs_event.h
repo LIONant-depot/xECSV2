@@ -29,6 +29,7 @@ namespace xecs::event
         {
             const char* m_pName = "Unnamed Notified Move Out System";
             guid        m_Guid{};
+            const char* m_pHelp = "";           // what the event tells and when it is sent (the editor shows it)
         };
     }
 
