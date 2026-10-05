@@ -9,6 +9,34 @@ namespace xecs::editor
     };
 
     //-------------------------------------------------------------------------------
+    // The state an entity has in the EDITOR: working aids ("get this out of my way while I work"). They are what the Level Tree's power and eye columns add and remove. They are saved with the scene like any
+    // other tag - they are the state the person left the scene in - and the scene/level compiler leaves them out of what the game gets (an editor-only tag is stripped there, with the rest of what the game
+    // does not need). The runtime has its own tags for the state the designer authors and the scripts change (xlioncore::disable_tag, xlioncore::no_render_tag): the two never fight over the same tag.
+    //
+    // disable_tag: EXCLUSIVE, like the runtime one - an entity that has it only matches the queries that name it, so every system ignores it (and so the render: it is in no view).
+    // no_render_tag: a regular tag - the render of the EDITOR's view leaves the entity out (the view of the game still draws it, as the scene view of other editors does).
+    //-------------------------------------------------------------------------------
+    struct disable_tag
+    {
+        constexpr static auto typedef_v = xecs::component::type::exclusive_tag
+        { .m_Guid  = xecs::component::type::guid{ "xecs::editor::disable" }
+        , .m_pName = "editor_disable"
+        };
+
+        XPROPERTY_DEF("editor_disable", disable_tag)
+    };
+
+    struct no_render_tag
+    {
+        constexpr static auto typedef_v = xecs::component::type::tag
+        { .m_Guid  = xecs::component::type::guid{ "xecs::editor::no_render" }
+        , .m_pName = "editor_no_render"
+        };
+
+        XPROPERTY_DEF("editor_no_render", no_render_tag)
+    };
+
+    //-------------------------------------------------------------------------------
 
     // Real, registered, reflected component tracking a prefab instance's per-property overrides -
     // see dependencies/xECSV2/doc and this session's design: the live component data always holds

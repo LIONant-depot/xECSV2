@@ -270,7 +270,8 @@ namespace xecs::persist::details
     // User-authored tags (e.g. a game's "static" tag) are part of an entity's identity and must be
     // saved, but they're invisible to getDataComponentInfos/getShareComponentInfos. Engine-managed
     // tags are excluded: prefab::tag is re-added by LoadGroupMember itself, and
-    // share_as_data_exclusive_tag only ever lives on internal share-entities. Tags carry no data, so
+    // share_as_data_exclusive_tag only ever lives on internal share-entities. (The editor's own state, editor_disable and
+    // editor_no_render, is saved like any other tag: it is the state the person left the scene in; the scene compiler leaves it out of the game.) Tags carry no data, so
     // they appear in a file's ComponentTypes list but never get a data block.
     //-----------------------------------------------------------------------------------------
     inline void AppendPersistentTagInfos( const xecs::archetype::instance& Archetype, std::vector<const xecs::component::type::info*>& Out ) noexcept
