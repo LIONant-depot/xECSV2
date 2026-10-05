@@ -124,6 +124,19 @@ namespace xecs::game_mgr
         xecs::serializer::stream    TextFile;
         xerr                        Error;
 
+        // Where a read stopped, said when it fails (a reload that cannot read its snapshot back leaves a half built world: the editor needs to know which components to blame).
+        std::string                 WhereArchetype;
+        const char*                 pWhereType = nullptr;
+        struct failure_note
+        {
+            bool                    m_bRead;
+            bool                    m_bOk = false;
+            const std::string&      m_Archetype;
+            const char* const&      m_pType;
+            xecs::serializer::stream& m_File;
+            ~failure_note() { if (m_bRead && !m_bOk) std::printf("SerializeGameState: the read stopped in the archetype [%s] at the component %s (record now: %s)\n", m_Archetype.c_str(), m_pType ? m_pType : "(none yet)", m_File.getRecordName().data()); }
+        } Note{ isRead, false, WhereArchetype, pWhereType, TextFile };
+
         // NOT xecs::component::type::info_v<xecs::prefab::tag>.m_BitID directly - this function is
         // XECS_API (its body is compiled exactly ONCE, into xECSV2.dll, unlike every Scene/Level/
         // Prefab persistence function, which stays `inline` and gets recompiled into whichever binary
@@ -394,6 +407,13 @@ namespace xecs::game_mgr
                 )) return Error;
 
 
+            if( isRead )
+            {
+                WhereArchetype.clear();
+                for( int i = 0; i < InfoCount; ++i ) { if( i ) WhereArchetype += ", "; WhereArchetype += Infos[i]->m_pName; }
+                pWhereType = nullptr;
+            }
+
             //
             // Get or create the actual archetype
             //
@@ -533,6 +553,7 @@ namespace xecs::game_mgr
 
                         for( auto iType = 0, end = (int)pP->m_ComponentInfos.size(); iType != end; iType++ )
                         {
+                            pWhereType = pP->m_ComponentInfos[iType]->m_pName;
                             if( SerializedModes[iType] == details::serialized_mode::MODE_SERIALIZER && pP->m_ComponentInfos[iType]->m_pSerilizeFn)
                             {
                                 int Count = 0;
@@ -554,7 +575,7 @@ namespace xecs::game_mgr
                                     {
                                         if( Error.getState<xtextfile::state>() == xtextfile::state::UNEXPECTED_RECORD )
                                         {
-                                            printf( "Warning: We were expecting a table but we failed to find it");
+                                            printf( "Warning: We were expecting a table but we failed to find it (%s, record now: %s)\n", pP->m_ComponentInfos[iType]->m_pName, TextFile.getRecordName().data() );
                                             Error.clear();
                                         }
                                         else
@@ -678,6 +699,7 @@ namespace xecs::game_mgr
             m_ArchetypeMgr.UpdateStructuralChanges();
         }
 
+        Note.m_bOk = !Error;
         return Error;
     }
 
