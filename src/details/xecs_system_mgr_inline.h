@@ -127,6 +127,11 @@ namespace xecs::system
             // The connectors the system declares (see xecs::system::connector).
             if constexpr (requires { real_system::connectors_v; })
                 System.m_Connectors = std::span<const xecs::system::connector>(real_system::connectors_v);
+
+            // What the system needs of the place it is placed in. Until a registry says otherwise a system that needs nothing is placed at the top level (what every system did before
+            // there were constraints); one that needs something waits, not placed, for someone to put it where it is given.
+            System.m_Requires = std::span<const xecs::system::constraint::info>(xecs::system::constraint::of_tuple_v<typename T_SYSTEM::constraints>);
+            System.m_bPlaced  = System.m_Requires.empty();
         }
 
         //
@@ -199,7 +204,7 @@ namespace xecs::system
         m_Events.m_OnFrameStart.NotifyAll();
         for( std::size_t i = 0; i < m_UpdaterSystems.size(); ++i )
         {
-            if( m_UpdaterSystems[i].second->m_pParent ) continue;                       // connected: its parent runs it
+            if( m_UpdaterSystems[i].second->m_pParent || !m_UpdaterSystems[i].second->m_bPlaced ) continue;     // connected: its parent runs it; not placed: nobody does
             const auto& D = m_Events.m_OnUpdate.m_Delegates[i];
             if( D.m_bEnabled ) D.m_pCallback(D.m_pClass);
         }
@@ -254,6 +259,8 @@ namespace xecs::system
             , .m_bEnabled        = m_Events.m_OnUpdate.m_Delegates[i].m_bEnabled
             , .m_ParentGuid      = ParentGuid
             , .m_ParentConnector = m_UpdaterSystems[i].second->m_ParentConnector
+            , .m_bPlaced         = m_UpdaterSystems[i].second->m_bPlaced
+            , .m_Requires        = m_UpdaterSystems[i].second->m_Requires
             });
         }
         return Rows;
@@ -313,10 +320,18 @@ namespace xecs::system
     void mgr::RestoreFromSnapshot( void ) noexcept
     {
         if( m_PreRunSnapshot.empty() ) return;
+        const auto Rows = std::move(m_PreRunSnapshot);
+        m_PreRunSnapshot.clear();
+        ApplyUpdateSystemRows( Rows );
+    }
 
-        for( std::size_t i = 0; i < m_PreRunSnapshot.size() && i < m_UpdaterSystems.size(); ++i )
+    //---------------------------------------------------------------------------
+
+    void mgr::ApplyUpdateSystemRows( const std::vector<update_system_row>& Rows ) noexcept
+    {
+        for( std::size_t i = 0; i < Rows.size() && i < m_UpdaterSystems.size(); ++i )
         {
-            const auto Guid = m_PreRunSnapshot[i].m_Guid;
+            const auto Guid = Rows[i].m_Guid;
             if( m_UpdaterSystems[i].first->m_Guid != Guid )
             {
                 for( std::size_t k = i + 1; k < m_UpdaterSystems.size(); ++k )
@@ -329,12 +344,62 @@ namespace xecs::system
                     }
                 }
             }
-            m_Events.m_OnUpdate.m_Delegates[i].m_bEnabled = m_PreRunSnapshot[i].m_bEnabled;
+            m_Events.m_OnUpdate.m_Delegates[i].m_bEnabled = Rows[i].m_bEnabled;
         }
-        for( auto& Row : m_PreRunSnapshot )
-            SetUpdateSystemParent( Row.m_Guid, Row.m_ParentGuid, Row.m_ParentConnector, false );
+        // The graph as it was: what was not placed, then the connections (a connection needs its parent placed, so the passes go on while one more can be made).
+        for( auto& Row : Rows )
+            if( !Row.m_bPlaced ) UnplaceUpdateSystem( Row.m_Guid );
+        for( std::size_t Pass = 0; Pass < Rows.size(); ++Pass )
+        {
+            bool bProgress = false;
+            for( auto& Row : Rows )
+            {
+                if( !Row.m_bPlaced ) continue;
+                const int i = [&]{ for( int k = 0; k < static_cast<int>(m_UpdaterSystems.size()); ++k ) if( m_UpdaterSystems[k].first->m_Guid == Row.m_Guid ) return k; return -1; }();
+                if( i < 0 ) continue;
+                const auto& S = *m_UpdaterSystems[i].second;
+                const bool bThere = S.m_bPlaced && ( (S.m_pParent == nullptr) == Row.m_ParentGuid.empty() ) && S.m_ParentConnector == Row.m_ParentConnector;
+                if( bThere ) continue;
+                if( SetUpdateSystemParent( Row.m_Guid, Row.m_ParentGuid, Row.m_ParentConnector, false ) ) bProgress = true;
+            }
+            if( !bProgress ) break;
+        }
+    }
 
-        m_PreRunSnapshot.clear();
+    //---------------------------------------------------------------------------
+
+    bool mgr::DropUpdateSystemOn( type::guid Source, type::guid Target ) noexcept
+    {
+        if( Source == Target ) return false;
+
+        const auto Rows = GetUpdateSystemRows();
+        const update_system_row* pSource = nullptr;
+        const update_system_row* pTarget = nullptr;
+        for( auto& R : Rows ) { if( R.m_Guid == Source ) pSource = &R; if( R.m_Guid == Target ) pTarget = &R; }
+        if( !pSource || !pTarget || !pTarget->m_bPlaced ) return false;
+        if( !CanPlaceUpdateSystem( Source, pTarget->m_ParentGuid, pTarget->m_ParentConnector ) ) return false;
+
+        if( !pSource->m_bPlaced || pSource->m_ParentGuid != pTarget->m_ParentGuid || pSource->m_ParentConnector != pTarget->m_ParentConnector )
+            if( !SetUpdateSystemParent( Source, pTarget->m_ParentGuid, pTarget->m_ParentConnector ) ) return false;
+
+        // The order among the systems of that connector (or of the top level): the source takes the position the target has now (the target moves one over), one step at a time.
+        const auto SiblingsNow = [&]() noexcept
+        {
+            std::vector<type::guid> Siblings;
+            for( auto& R : GetUpdateSystemRows() )
+                if( R.m_bPlaced && R.m_ParentGuid == pTarget->m_ParentGuid && R.m_ParentConnector == pTarget->m_ParentConnector ) Siblings.push_back( R.m_Guid );
+            return Siblings;
+        };
+        const auto IndexIn = []( const std::vector<type::guid>& Siblings, type::guid Guid ) noexcept { return static_cast<int>( std::find( Siblings.begin(), Siblings.end(), Guid ) - Siblings.begin() ); };
+        const int Goal = IndexIn( SiblingsNow(), Target );
+        for( int Guard = 0; Guard < 256; ++Guard )
+        {
+            const auto Siblings = SiblingsNow();
+            const int  is       = IndexIn( Siblings, Source );
+            if( is == Goal || is >= static_cast<int>(Siblings.size()) || Goal >= static_cast<int>(Siblings.size()) ) break;
+            MoveUpdateSystem( Source, Goal > is ? 1 : -1 );
+        }
+        return true;
     }
 
     //---------------------------------------------------------------------------
@@ -351,6 +416,7 @@ namespace xecs::system
             { .m_Guid     = m_UpdaterSystems[i].first->m_Guid.m_Value
             , .m_Name     = m_UpdaterSystems[i].first->m_pName
             , .m_bEnabled = m_Events.m_OnUpdate.m_Delegates[i].m_bEnabled
+            , .m_bPlaced  = m_UpdaterSystems[i].second->m_bPlaced
             });
 
             if( const auto* pParent = m_UpdaterSystems[i].second->m_pParent; pParent )
@@ -439,22 +505,118 @@ namespace xecs::system
             ++TargetIndex;
         }
 
-        // The connections: a parent that is gone, a connector it does not have (any more) or a loop leaves the system at the top level.
+        // Where each system is placed. The file lists every system of its game, so one it does not mention is new (a script module added it): it waits as an available system until a person
+        // places it. (Without a file there is nothing to say where anything goes: the systems that need nothing of their place run at the top level, as they always did.)
+        for( auto& S : m_UpdaterSystems )
+        {
+            bool bListed = false;
+            for( auto& Entry : Config.m_UpdateOrder ) if( Entry.m_Guid == S.first->m_Guid.m_Value ) { bListed = true; break; }
+            if( !bListed ) S.second->m_bPlaced = false;
+        }
+
+        // A system the file places at the top level is placed if that place gives what it needs; a connected one waits (not placed) until its connection can be made. What cannot be
+        // placed where the file says (the parent is gone, or does not have the connector any more, or the place does not give what the system needs now) is an available system again.
+        std::vector<const system_order_entry*> Pending;
         for( auto& Entry : Config.m_UpdateOrder )
         {
-            if( Entry.m_ParentGuid == 0 ) continue;
-            int ParentConnector = -1;
-            for( auto& Other : m_UpdaterSystems )
-                if( Other.first->m_Guid.m_Value == Entry.m_ParentGuid )
-                {
-                    for( int c = 0; c < static_cast<int>(Other.second->m_Connectors.size()); ++c )
-                        if( Entry.m_Connector == Other.second->m_Connectors[c].m_pName ) { ParentConnector = c; break; }
-                    break;
-                }
-            if( ParentConnector >= 0 ) SetUpdateSystemParent( type::guid{ Entry.m_Guid }, type::guid{ Entry.m_ParentGuid }, ParentConnector, false );
+            const type::guid Guid{ Entry.m_Guid };
+            auto It = std::find_if( m_UpdaterSystems.begin(), m_UpdaterSystems.end(), [&]( auto& S ){ return S.first->m_Guid == Guid; } );
+            if( It == m_UpdaterSystems.end() ) continue;
+            It->second->m_bPlaced = false;
+            if( !Entry.m_bPlaced ) continue;
+            if( Entry.m_ParentGuid == 0 ) { SetUpdateSystemParent( Guid, type::guid{}, -1, false ); continue; }
+            Pending.push_back( &Entry );
+        }
+        for( std::size_t Pass = 0; Pass <= Pending.size(); ++Pass )                 // a parent may itself be waiting for its own connection: the passes go on while one more is made
+        {
+            bool bProgress = false;
+            for( auto It = Pending.begin(); It != Pending.end(); )
+            {
+                const auto& Entry = **It;
+                int ParentConnector = -1;
+                for( auto& Other : m_UpdaterSystems )
+                    if( Other.first->m_Guid.m_Value == Entry.m_ParentGuid )
+                    {
+                        for( int c = 0; c < static_cast<int>(Other.second->m_Connectors.size()); ++c )
+                            if( Entry.m_Connector == Other.second->m_Connectors[c].m_pName ) { ParentConnector = c; break; }
+                        break;
+                    }
+                if( ParentConnector >= 0 && SetUpdateSystemParent( type::guid{ Entry.m_Guid }, type::guid{ Entry.m_ParentGuid }, ParentConnector, false ) ) { It = Pending.erase(It); bProgress = true; }
+                else ++It;
+            }
+            if( !bProgress ) break;
         }
 
         return {};
+    }
+
+    //---------------------------------------------------------------------------
+
+    bool mgr::CanPlaceUpdateSystem( type::guid Child, type::guid Parent, int ConnectorIndex, std::string* pWhy ) const noexcept
+    {
+        auto Why = [&]( std::string Text ) noexcept { if( pWhy ) *pWhy = std::move(Text); return false; };
+
+        const instance* pChild = nullptr;
+        const instance* pParent = nullptr;
+        for( auto& S : m_UpdaterSystems )
+        {
+            if( S.first->m_Guid == Child )  pChild  = S.second.get();
+            if( !Parent.empty() && S.first->m_Guid == Parent ) pParent = S.second.get();
+        }
+        if( !pChild ) return Why( "there is no such system" );
+
+        std::span<const constraint::info> Given;                    // the top level of the frame gives nothing
+        if( !Parent.empty() )
+        {
+            if( !pParent ) return Why( "there is no such place" );
+            if( ConnectorIndex < 0 || ConnectorIndex >= static_cast<int>(pParent->m_Connectors.size()) ) return Why( "the system has no such connector" );
+            if( !pParent->m_bPlaced ) return Why( "the system of that connector is not placed" );
+            for( const instance* p = pParent; p; p = p->m_pParent )     // a system cannot be its own ancestor
+                if( p == pChild ) return Why( "a system cannot be connected under itself" );
+            Given = pParent->m_Connectors[ConnectorIndex].m_Provides;
+        }
+
+        if( constraint::Solved( pChild->m_Requires, Given ) ) return true;
+
+        std::string Missing;
+        for( auto& N : pChild->m_Requires )
+        {
+            bool bFound = false;
+            for( auto& G : Given ) if( G.m_Guid == N.m_Guid ) { bFound = true; break; }
+            if( !bFound ) { if( !Missing.empty() ) Missing += ", "; Missing += N.m_pName; }
+        }
+        return Why( std::format( "this place does not give what the system needs: {}", Missing ) );
+    }
+
+    //---------------------------------------------------------------------------
+
+    bool mgr::IsUpdateSystemPlaced( type::guid Guid ) const noexcept
+    {
+        for( auto& S : m_UpdaterSystems ) if( S.first->m_Guid == Guid ) return S.second->m_bPlaced;
+        return false;
+    }
+
+    //---------------------------------------------------------------------------
+
+    std::span<const constraint::info> mgr::GetUpdateSystemConstraints( type::guid Guid ) const noexcept
+    {
+        for( auto& S : m_UpdaterSystems ) if( S.first->m_Guid == Guid ) return S.second->m_Requires;
+        return {};
+    }
+
+    //---------------------------------------------------------------------------
+
+    void mgr::UnplaceUpdateSystem( type::guid Guid ) noexcept
+    {
+        for( auto& S : m_UpdaterSystems )
+        {
+            if( S.first->m_Guid != Guid ) continue;
+            S.second->m_bPlaced = false;
+            S.second->m_pParent = nullptr; S.second->m_ParentConnector = -1;
+            for( auto& Other : m_UpdaterSystems )                       // what is connected under it has nowhere to run: it is not placed either
+                if( Other.second->m_pParent == S.second.get() ) UnplaceUpdateSystem( Other.first->m_Guid );
+            return;
+        }
     }
 
     //---------------------------------------------------------------------------
@@ -471,10 +633,11 @@ namespace xecs::system
         const int ci = IndexOf(Child);
         if( ci < 0 ) return false;
         auto& ChildSystem = *m_UpdaterSystems[ci].second;
+        if( !CanPlaceUpdateSystem( Child, Parent, ConnectorIndex ) ) return false;
 
-        if( Parent.empty() )                                            // back to the top level
+        if( Parent.empty() )                                            // the top level
         {
-            ChildSystem.m_pParent = nullptr; ChildSystem.m_ParentConnector = -1;
+            ChildSystem.m_pParent = nullptr; ChildSystem.m_ParentConnector = -1; ChildSystem.m_bPlaced = true;
             if( bGoLast )
             {
                 std::rotate( m_UpdaterSystems.begin() + ci,                m_UpdaterSystems.begin() + ci + 1,                m_UpdaterSystems.end() );
@@ -493,6 +656,7 @@ namespace xecs::system
 
         ChildSystem.m_pParent          = &ParentSystem;
         ChildSystem.m_ParentConnector  = ConnectorIndex;
+        ChildSystem.m_bPlaced          = true;
 
         if( bGoLast )                                                   // last among the children of that connector (the end of the list)
         {
@@ -509,7 +673,7 @@ namespace xecs::system
         for( std::size_t i = 0; i < m_UpdaterSystems.size(); ++i )
         {
             const auto& S = *m_UpdaterSystems[i].second;
-            if( S.m_pParent != &Parent || S.m_ParentConnector != ConnectorIndex ) continue;
+            if( S.m_pParent != &Parent || S.m_ParentConnector != ConnectorIndex || !S.m_bPlaced ) continue;
             const auto& D = m_Events.m_OnUpdate.m_Delegates[i];
             if( D.m_bEnabled ) D.m_pCallback(D.m_pClass);
         }

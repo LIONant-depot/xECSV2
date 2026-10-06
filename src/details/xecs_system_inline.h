@@ -463,6 +463,26 @@ instance::Foreach
     }
 
     //-------------------------------------------------------------------------------------------
+
+    template
+    <   typename T_FUNCTION
+    ,   auto     T_SHARE_AS_DATA
+    > requires
+    ( xecs::tools::assert_is_callable_v<T_FUNCTION>
+        && (   xecs::tools::function_return_v<T_FUNCTION, bool >
+            || xecs::tools::function_return_v<T_FUNCTION, void > )
+    ) constexpr
+    bool
+instance::QForeach
+    ( T_FUNCTION&& Function 
+    ) const noexcept
+    {
+        xecs::query::instance Query;
+        Query.AddQueryFromFunction(Function);
+        return m_GameMgr.Foreach<T_FUNCTION,T_SHARE_AS_DATA>(Search(Query), std::forward<T_FUNCTION&&>(Function) );
+    }
+
+    //-------------------------------------------------------------------------------------------
     template
     < typename T_SYSTEM
     > constexpr

@@ -10,10 +10,76 @@ namespace xecs::system
     //
     // Which system is connected to which connector is DATA (xecs::system::mgr::Save/Load, edited in the System Registry): a system nobody connected
     // runs at the top level, in the order it was registered.
+    //
+    // A constraint is a guarantee a place of the system graph gives to the systems placed in it (the top level of the frame gives none), and a need of a system: a system can only
+    // be placed where everything it needs is given. A constraint is an empty type that names itself:
+    //
+    //      struct fixed_step { static constexpr auto typedef_v = xecs::system::constraint::def{ .m_pName = "Fixed Step", .m_pDescription = "Runs once for every fixed step of the game" }; };
+    //
+    // A system says what it needs with `using constraints = std::tuple<fixed_step>;`, a connector what it gives in `m_Provides` (see provides_v). The guid is made from the type, as
+    // the guid of a system is: the editor shows the names, the data (SystemOrder.config.txt) never mentions a constraint, only where each system is placed.
+    //
+    namespace constraint
+    {
+        using guid = xresource::guid<struct constraint_tag>;
+
+        struct def
+        {
+            const char* m_pName         = "Unnamed Constraint";
+            const char* m_pDescription  = "";
+        };
+
+        struct info
+        {
+            guid        m_Guid;
+            const char* m_pName;
+            const char* m_pDescription;
+        };
+
+        namespace details
+        {
+            template< typename T >
+            consteval guid GuidOf( void ) noexcept { return guid{ __FUNCSIG__ }; }
+
+            template< typename T >
+            inline constexpr info info_v = { GuidOf<T>(), T::typedef_v.m_pName, T::typedef_v.m_pDescription };
+
+            template< typename T_TUPLE >
+            struct of_tuple;
+
+            template< typename... T >
+            struct of_tuple< std::tuple<T...> >
+            {
+                static constexpr std::array<info, sizeof...(T)> value_v = { info_v<T>... };
+            };
+        }
+
+        // What a connector gives: provides_v<fixed_step, before_step>
+        template< typename... T >
+        inline constexpr std::array<info, sizeof...(T)> provides_v = { details::info_v<T>... };
+
+        // What a system needs, from its `constraints` tuple.
+        template< typename T_TUPLE >
+        inline constexpr auto& of_tuple_v = details::of_tuple<T_TUPLE>::value_v;
+
+        // Whether everything in Needed is in Given.
+        inline constexpr bool Solved( std::span<const info> Needed, std::span<const info> Given ) noexcept
+        {
+            for( auto& N : Needed )
+            {
+                bool bFound = false;
+                for( auto& G : Given ) if( G.m_Guid == N.m_Guid ) { bFound = true; break; }
+                if( !bFound ) return false;
+            }
+            return true;
+        }
+    }
+
     struct connector
     {
-        const char* m_pName;
-        const char* m_pDescription;
+        const char*                         m_pName;
+        const char*                         m_pDescription;
+        std::span<const constraint::info>   m_Provides {};      // what the systems connected here are given (a system needs all of its constraints given to be connected)
     };
 
     namespace type
@@ -222,6 +288,7 @@ namespace xecs::system
         using                   entity      = xecs::component::entity;      // Shortcut for entity
         using                   query       = std::tuple<>;                 // Override this to specify the query for the system
         using                   events      = std::tuple<>;                 // Override this to create events which other systems can use
+        using                   constraints = std::tuple<>;                 // Override this to say what the system needs from the place it is placed in (see xecs::system::constraint)
         constexpr static auto   typedef_v   = type::update{};               // Override this to specify which type of system this is
 
         void    OnCreate                ( void )                noexcept {} // All Systems:         When the system is created
@@ -326,6 +393,17 @@ namespace xecs::system
                                                                     ) const noexcept;
         template
         <   typename T_FUNCTION
+        ,   auto     T_SHARE_AS_DATA = false
+        > requires
+        ( xecs::tools::assert_is_callable_v<T_FUNCTION>
+            && (   xecs::tools::function_return_v<T_FUNCTION, bool >
+                || xecs::tools::function_return_v<T_FUNCTION, void > )
+        ) __inline constexpr
+            bool                            QForeach                ( T_FUNCTION&&                                  Function
+                                                                    ) const noexcept;
+
+        template
+        <   typename T_FUNCTION
         > requires
         ( xecs::tools::assert_is_callable_v<T_FUNCTION>
             && (   xecs::tools::function_return_v<T_FUNCTION, bool >
@@ -419,6 +497,9 @@ namespace xecs::system
         // frame, its parent runs it. isConnected() tells a system which of the two it is.
         [[nodiscard]] std::span<const connector>    getConnectors           ( void ) const noexcept { return m_Connectors; }
         [[nodiscard]] bool                          isConnected             ( void ) const noexcept { return m_pParent != nullptr; }
+        // What the system needs from the place it is placed in, and whether it is placed at all: a system that is not placed does not run (it is one of the available systems of the registry).
+        [[nodiscard]] std::span<const constraint::info> getConstraints      ( void ) const noexcept { return m_Requires; }
+        [[nodiscard]] bool                          isPlaced                ( void ) const noexcept { return m_bPlaced; }
         // The game manager this system belongs to: for what the system's own functions do not forward (the user data of the game, a function that takes the manager).
         [[nodiscard]] xecs::game_mgr::instance&     getGameMgr              ( void ) const noexcept { return m_GameMgr; }
         // Runs the children of one of the connectors of THIS system, in order (a child that is disabled is skipped).
@@ -428,6 +509,8 @@ namespace xecs::system
 
         xecs::game_mgr::instance&   m_GameMgr;
         std::span<const connector>  m_Connectors    {};
+        std::span<const constraint::info> m_Requires {};            // what the system needs of the place it is placed in
+        bool                        m_bPlaced       = true;         // in the graph (the top level, or a connector): an update system that is not placed does not run
         xecs::system::instance*     m_pParent       = nullptr;      // the system this one is connected to, and the connector of it
         int                         m_ParentConnector = -1;
         friend struct xecs::system::mgr;

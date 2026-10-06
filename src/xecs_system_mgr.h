@@ -17,6 +17,8 @@ namespace xecs::system
         // gets another connector). No parent: the system runs at the top level.
         std::uint64_t   m_ParentGuid{};
         std::string     m_Connector;
+        // In the graph, or one of the available systems (it does not run). A file written before systems had to be placed has no such field: the system was running, so it is placed.
+        bool            m_bPlaced   = true;
 
         XPROPERTY_DEF
         ( "SystemOrderEntry", system_order_entry
@@ -25,6 +27,7 @@ namespace xecs::system
         , obj_member<"Enabled",    &system_order_entry::m_bEnabled>
         , obj_member<"ParentGuid", &system_order_entry::m_ParentGuid>
         , obj_member<"Connector",  &system_order_entry::m_Connector>
+        , obj_member<"Placed",     &system_order_entry::m_bPlaced>
         )
     };
     XPROPERTY_REG(system_order_entry)
@@ -52,6 +55,8 @@ namespace xecs::system
         bool        m_bEnabled;
         type::guid  m_ParentGuid    {};         // the system this one is connected to (empty: top level)
         int         m_ParentConnector = -1;     // and which of its connectors
+        bool        m_bPlaced       = true;     // in the graph; not placed: one of the available systems, it does not run
+        std::span<const constraint::info> m_Requires {};    // what the system needs of the place it is placed in
     };
 
     //-----------------------------------------------------------------
@@ -111,8 +116,40 @@ namespace xecs::system
         void                    SetUpdateSystemEnabled  ( type::guid Guid
                                                         , bool        bEnabled
                                                         ) noexcept;
+        // Whether Child can be placed at the top level (an empty Parent) or in a connector of Parent: the place must be in the graph itself and give everything the system needs. When it
+        // cannot, pWhy (when given) says what is missing.
+        inline
+        bool                    CanPlaceUpdateSystem    ( type::guid   Child
+                                                        , type::guid   Parent
+                                                        , int          ConnectorIndex
+                                                        , std::string* pWhy = nullptr
+                                                        ) const noexcept;
+        // Puts the update systems back as the rows say (rows as GetUpdateSystemRows gave them at some time): their order, whether each one is enabled, and the graph (what is placed, and where).
+        // What the undo of a change of the registry does.
+        inline
+        void                    ApplyUpdateSystemRows   ( const std::vector<update_system_row>& Rows
+                                                        ) noexcept;
+        // Source takes the place of Target (a system that is placed): it is placed where Target is, in the same connector or at the top level, when that place gives what it needs, and goes where
+        // Target was among its siblings. False when it cannot be.
+        inline
+        bool                    DropUpdateSystemOn      ( type::guid Source
+                                                        , type::guid Target
+                                                        ) noexcept;
+        // Whether the system is in the graph, and what it needs of the place it is placed in (empty when it is not a registered update system).
+        inline
+        bool                    IsUpdateSystemPlaced    ( type::guid Guid
+                                                        ) const noexcept;
+        inline
+        std::span<const constraint::info>
+                                GetUpdateSystemConstraints( type::guid Guid
+                                                        ) const noexcept;
+        // Takes the system (and everything connected under it) out of the graph: they are available systems again and do not run.
+        inline
+        void                    UnplaceUpdateSystem     ( type::guid Guid
+                                                        ) noexcept;
         // Connects Child to a connector of Parent (an empty Parent: back to the top level). Refused (false) when the parent does not exist or
-        // has no such connector, or when it would make a system its own ancestor. The child goes to the end of the children of that connector.
+        // has no such connector, when the place does not give what the system needs (CanPlaceUpdateSystem), or when it would make a system its own ancestor. The child goes to the end of the
+        // children of that connector. A system that was not placed is placed by it.
         inline
         bool                    SetUpdateSystemParent   ( type::guid Child
                                                         , type::guid Parent
