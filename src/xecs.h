@@ -176,5 +176,7 @@ struct std::hash<xresource::guid<T>>
 // xecs::serializer::stream::Field template and on-disk component-serialization approach
 // xecs_scene_inline.h's SaveEntity/LoadEntity already use, so this must come after both.
 #include "details/xecs_prefab_mgr_inline.h"
+// A prefab instance is a recipe (prefabs_plan.md phase 3): the plan of a prefab, a scene's instances staged at load, refreshed at save, converted, applied.
+#include "details/xecs_prefab_recipe_inline.h"
 
 #endif

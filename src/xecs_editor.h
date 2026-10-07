@@ -67,6 +67,13 @@ namespace xecs::editor
     };
     XPROPERTY_REG(prefab_property_override)
 
+    // A member of an instance, addressed (documentation/Editors/prefabs_plan.md, 3.3): the permanent id of the member inside its prefab,
+    // and when the member belongs to a nested instance, the chain of ids that crosses each instance boundary ([outer member id, inner
+    // member id, ...]). Empty: the entity that carries the prefab_instance (the instance root). The root of a prefab that is itself an
+    // instance (a variant) adds no element: its members are addressed as the base prefab's. Reordering, inserting or removing children
+    // in a prefab changes no address; a member the prefab no longer has leaves an orphan, which the editor lists.
+    using member_address = std::vector<std::uint64_t>;
+
     struct prefab_component_override
     {
         // Plain uint64 rather than xecs::component::type::guid itself: unlike the resource-system's
@@ -78,24 +85,19 @@ namespace xecs::editor
         // xecs::component::type::guid at the two call sites that need it (E29's override bookkeeping).
         std::uint64_t                          m_ComponentTypeGuid;
 
-        // Which member of the group this override targets, as a child-index path walked from the
-        // entity that actually carries this prefab_instance component: empty means "the
-        // prefab_instance-carrying entity itself" (the only case that existed before multi-entity
-        // groups), {i} means "my children.m_List[i]", {i,j} means that child's own children.m_List[j],
-        // etc. A path, not a stored id, because a placed instance's non-root members have no id of
-        // their own at all - the instance is a structural clone of the prefab's own root/children tree
-        // (see [[xecs_multientity_prefab_architecture]]), so the SAME index path found by walking down
-        // from the instance root also finds the corresponding member walking down from the PREFAB's own
-        // root, with no extra bookkeeping needed on either side. Stops at the nearest containing
-        // instance (does not cross into a nested instance's own subtree) - matches this session's
-        // existing scope narrowing for nested-instance diffs.
+        // Which member of the instance this override targets (see member_address).
+        member_address                         m_Member;
+
+        // Before prefabs_plan.md phase 3: a child-index path from the entity carrying the prefab_instance. Read from old files only
+        // (never written): the loader turns it into m_Member, resolving it against the prefab as it is (prefab_instance::m_Format 0).
         std::vector<std::uint32_t>             m_MemberPath;
         std::vector<prefab_property_override>  m_PropertyOverrides;
 
         XPROPERTY_DEF
         ( "PrefabComponentOverride", prefab_component_override
         , obj_member<"ComponentTypeGuid", &prefab_component_override::m_ComponentTypeGuid>
-        , obj_member<"MemberPath",         &prefab_component_override::m_MemberPath>
+        , obj_member<"Member",             &prefab_component_override::m_Member>
+        , obj_member<"MemberPath",         &prefab_component_override::m_MemberPath, member_flags<flags::DONT_SHOW, flags::DONT_SAVE>>
         , obj_member<"PropertyOverrides",  &prefab_component_override::m_PropertyOverrides>
         )
     };
@@ -113,32 +115,39 @@ namespace xecs::editor
     {
         std::uint64_t   m_ComponentTypeGuid;
         bool            m_bAdded;
+        member_address  m_Member;           // the member whose components differ (empty: the instance root). The data of a component added to a
+                                            // member is kept as property overrides of every one of its properties (a member has no file of its own).
 
         XPROPERTY_DEF
         ( "PrefabComponentDiff", prefab_component_diff
         , obj_member<"ComponentTypeGuid", &prefab_component_diff::m_ComponentTypeGuid>
         , obj_member<"Added",             &prefab_component_diff::m_bAdded>
+        , obj_member<"Member",            &prefab_component_diff::m_Member>
         )
     };
     XPROPERTY_REG(prefab_component_diff)
 
-    // Structural (child) presence vs the prefab - same compositional idea as prefab_component_diff,
-    // but the key is a MemberPath (child-index path from the PI root), not a component type guid.
-    // m_bAdded false = a prefab-defined child this instance removed; true = a child added only on
-    // the instance (wired for symmetry; removed-child is the first consumer).
+    // Structural presence vs the prefab: m_bAdded false = a member of the prefab (and its subtree) this instance removed. m_bAdded true = the
+    // member has children the prefab does not have: they are ordinary entities of the scene whose parent is that member (prefabs_plan.md 3.2),
+    // listed here when the recipe is refreshed so that Apply and Revert know them; the loader does not need it.
     struct prefab_hierarchy_diff
     {
-        std::vector<std::uint32_t>  m_MemberPath;
+        member_address              m_Member;
         bool                        m_bAdded;
+        std::vector<std::uint32_t>  m_MemberPath;       // before phase 3 (child-index path): read from old files only, see prefab_component_override
 
         XPROPERTY_DEF
         ( "PrefabHierarchyDiff", prefab_hierarchy_diff
-        , obj_member<"MemberPath", &prefab_hierarchy_diff::m_MemberPath>
+        , obj_member<"Member",     &prefab_hierarchy_diff::m_Member>
         , obj_member<"Added",      &prefab_hierarchy_diff::m_bAdded>
+        , obj_member<"MemberPath", &prefab_hierarchy_diff::m_MemberPath, member_flags<flags::DONT_SHOW, flags::DONT_SAVE>>
         )
     };
     XPROPERTY_REG(prefab_hierarchy_diff)
 
+    // A prefab instance is a recipe (prefabs_plan.md 3.2): which prefab, and what this instance does differently. In a scene only the entity that
+    // carries it is stored; its members are spawned from the prefab when the scene loads, with ids derived from the instance's id and their
+    // address (xecs::scene::DeriveMemberId). Inside a prefab, a member that carries one is a nested instance (its members come from its prefab).
     struct prefab_instance
     {
         constexpr static auto typedef_v = xecs::component::type::data
@@ -147,10 +156,16 @@ namespace xecs::editor
         ,   .m_ReferenceMode    = xecs::component::type::reference_mode::NO_REFERENCES
         };
 
+        // m_Format: 0 = written before phase 3 (in a scene, every member was an entity file of the scene, overrides addressed by child-index
+        // paths); 1 = a recipe (members spawned, addressed by member_address). An old file has no Format row and reads 0; the loader
+        // converts it (xecs::prefab::recipe), and the next save writes 1.
+        static constexpr std::uint32_t recipe_format_v = 1;
+
         xecs::prefab::guid                          m_PrefabInstance;
         std::vector<prefab_component_override>      m_lComponents;
         std::vector<prefab_component_diff>          m_ComponentDiffs;
         std::vector<prefab_hierarchy_diff>          m_HierarchyDiffs;
+        std::uint32_t                               m_Format = recipe_format_v;
 
         XPROPERTY_DEF
         ( "EditorPrafabInstance", prefab_instance
@@ -158,6 +173,7 @@ namespace xecs::editor
         , obj_member<"Components",      &prefab_instance::m_lComponents>
         , obj_member<"ComponentDiffs",  &prefab_instance::m_ComponentDiffs>
         , obj_member<"HierarchyDiffs",  &prefab_instance::m_HierarchyDiffs>
+        , obj_member<"Format",          &prefab_instance::m_Format>
         )
     };
     XPROPERTY_REG(prefab_instance)

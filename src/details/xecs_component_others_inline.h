@@ -10,7 +10,13 @@ namespace xecs::component
     xerr parent::Serialize( xecs::serializer::stream& TextFile, bool ) noexcept
     {
         if( auto Err = TextFile.Field("Parent", m_Value ); Err ) return Err;
-        return TextFile.Field("Follow", m_Follow);
+        if( false == TextFile.isReading() ) return TextFile.Field("Follow", m_Follow);
+
+        // A record written before Follow was a field has no such column: it keeps the default the field was introduced with
+        // (FOLLOW_DEFAULT, what m_Follow is constructed with). Read apart from the error, so the missing column does not end the record.
+        std::uint8_t Follow = m_Follow;
+        if( auto FollowErr = TextFile.Field("Follow", Follow); !FollowErr ) m_Follow = Follow;
+        return {};
     }
 
     //----------------------------------------------------------------------------------------------------

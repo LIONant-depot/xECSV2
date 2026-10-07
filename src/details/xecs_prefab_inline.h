@@ -4,9 +4,7 @@ namespace xecs::prefab
     {
         xerr Error;
 
-        (   ( Error = TextFile.Field("Guid", m_Guid.m_Instance.m_Value) )
-        ||  ( Error = TextFile.Field( "ParentGuid", m_ParentPrefabGuid.m_Instance.m_Value ) )
-        );
+        Error = TextFile.Field("Guid", m_Guid.m_Instance.m_Value);
 
         return Error;
     }

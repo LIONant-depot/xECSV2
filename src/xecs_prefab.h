@@ -29,26 +29,31 @@ namespace xecs::prefab
 
         inline xerr Serialize(xecs::serializer::stream&, bool) noexcept;
 
-        guid                                                        m_ParentPrefabGuid; // GUID of the parent prefab is this is null the is a regular prefab other wise is a variant
+        // A variant is a prefab whose root is an instance of its base prefab (its prefab_instance says which): the root no longer records a
+        // parent prefab guid of its own (prefabs_plan.md, phase 3: one mechanism for nesting and variants).
         guid                                                        m_Guid;             // GUID of the prefab
     };
 
-    // A multi-entity ("Scene-Prefab") group's own local-id scheme, scoped to just one prefab's
-    // member set - the direct analog of xecs::scene::permanent_id, just not shared with Scene's
-    // own id space (a prefab has no folders/dependencies/residency, so it doesn't need any of
-    // Scene's other bookkeeping, only the id<->live-entity mapping). GUID-like minting
-    // (mgr::details::NextFreeLocalId), not sequential - same merge-collision reasoning already
-    // applied to E29's own NextFreeEntityId.
-    using local_id = std::uint32_t;
-    constexpr local_id invalid_local_id_v = 0;
+    // A prefab is a scene (documentation/Editors/prefabs_plan.md, 3.1): its members are addressed by the
+    // scene's permanent_id, scoped to that one prefab. GUID-like minting (mgr::details::NextFreeLocalId),
+    // not sequential - same merge-collision reasoning already applied to E29's own NextFreeEntityId. The
+    // "LocalId" values of the old one-file format are kept as the permanent ids.
+    using local_id = xecs::scene::permanent_id;
+    constexpr local_id invalid_local_id_v = xecs::scene::invalid_permanent_id_v;
 
-    // Save/EnsureLoaded's own bookkeeping for one prefab group's members - kept OUTSIDE mgr::m_PrefabList
-    // (which still only ever stores the root entity, unchanged, so every existing reader keeps
-    // compiling) in a separate, purely-additive map (mgr::m_PrefabGroups) keyed the same way.
-    struct group_bookkeeping
+    // A resident template's bookkeeping is the scene's own (m_LocalToRuntime/m_RuntimeToLocal, the entity
+    // names), held by the prefab manager (mgr::m_PrefabGroups) and never in the scene manager's list: no
+    // tree lists a template's members. mgr::m_PrefabList still stores only the root entity.
+    using group_bookkeeping = xecs::scene::instance;
+
+    // A reference a member of a group being made into a prefab held to an entity outside the group: the prefab keeps a null one (a prefab
+    // references only its own members), and the instance the group becomes keeps it as an override (what Unity does), see mgr::CreatePrefabFromEntity.
+    struct outside_reference
     {
-        std::unordered_map<local_id, xecs::component::entity>   m_LocalToRuntime;
-        std::unordered_map<std::uint64_t, local_id>              m_RuntimeToLocal;  // keyed by entity.m_Value
+        local_id                    m_Member    = invalid_local_id_v;   // the member's id in the prefab
+        std::uint64_t               m_Component = 0;                    // the component type guid
+        std::string                 m_Path;                             // the property path
+        xecs::component::entity     m_Target{};                         // what it referenced
     };
 
     //-------------------------------------------------------------------------------

@@ -744,7 +744,6 @@ instance::AddOrRemoveComponents
                 , [&]( xecs::prefab::root& Root, T_ARGS&&... Components ) noexcept
                 {
                     Root.m_Guid             = PrefabVariantGuid;
-                    Root.m_ParentPrefabGuid = PrefabGuid;
 
                     if constexpr ( false == std::is_same_v<T_FUNCTION, xecs::tools::empty_lambda> ) Function( std::forward<T_ARGS&&>(Components)... );
                 }

@@ -2,7 +2,7 @@
 
 # [xECS](xecs.md) / Builder Components
 
-| STATUS:<br>:page_with_curl: | **Phase 1 implemented** (flag, builder systems, build plans, scene load, editor Play). Not staged yet: runtime prefab spawning and typed `CreateEntity` - see *Implementation status* at the end. First consumer: xLION physics. |
+| STATUS:<br>:page_with_curl: | **Phase 1 implemented** (flag, builder systems, build plans, scene load, editor Play, prefab spawning). Not staged yet: typed `CreateEntity` - see *Implementation status* at the end. First consumer: xLION physics. |
 |:---:|---|
 
 ## The problem
@@ -198,7 +198,8 @@ Done (phase 1):
   (`OnSceneReady` and the per-frame recreate are gone; type changes use `b3Body_SetType`).
 
 Still to do:
-* Stage the runtime paths: prefab instancing (`prefab::mgr::CreatePrefabInstance`) and typed
-  `CreateEntity` / archetype `CreateEntity(callback)`.
+* Stage the runtime paths: typed `CreateEntity` / archetype `CreateEntity(callback)`. (Prefab spawning is staged since
+  prefabs_plan.md phase 4: `prefab::mgr::Spawn` stages and builds a member builder systems take, see `xecs_prefab.md`; the
+  old clone, `CreatePrefabInstance` with components added/removed or the root left out, still is not.)
 * Editor: the Systems button lists builder systems and turns red for unconsumed builder components.
 * `smoke_test_builder.cpp`.

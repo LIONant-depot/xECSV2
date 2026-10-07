@@ -44,15 +44,15 @@ namespace xecs::persist::details
     }
 
     //-----------------------------------------------------------------------------------------
-    // Walks one newly-created (already component-populated) entity's data components, in the same
-    // DataSpan/getComponentInSequenceByInfo pattern CreatePrefabInstance's own in-memory reference
-    // remap pass uses (details/xecs_prefab_mgr_inline.h - a separate, raw-entity-handle remap, not
-    // this disk-encoding one), and replaces every encoded reference field's raw int64 with the
-    // resolved live runtime entity - or a proper null (xecs::component::entity{}, NOT a bit-pattern
-    // 0) for an encoded 0.
+    // Walks one entity's data components, in the same DataSpan/getComponentInSequenceByInfo pattern
+    // CreatePrefabInstance's own in-memory reference remap pass uses (details/xecs_prefab_mgr_inline.h),
+    // and replaces every entity reference (parent and children included) with Remap(reference). Shared by
+    // RemapLoadedEntityReferences (encoded values from a file), a prefab's clone (the source's handles to
+    // the template's own members) and a prefab's Save check (a reference that leaves the prefab).
     //-----------------------------------------------------------------------------------------
-    template< typename T_RESOLVE >   // xecs::component::entity(std::int64_t Encoded) noexcept
-    inline void RemapLoadedEntityReferences( xecs::game_mgr::instance& GameMgr, xecs::component::entity Entity, T_RESOLVE&& Resolve ) noexcept
+    template< typename T_REMAP       // xecs::component::entity(xecs::component::entity Reference) noexcept
+            , typename T_INCLUDE >   // bool(const xecs::component::type::info&) noexcept - which components are walked
+    inline void RemapEntityReferences( xecs::game_mgr::instance& GameMgr, xecs::component::entity Entity, T_REMAP&& Remap, T_INCLUDE&& Include ) noexcept
     {
         auto& IDetails  = GameMgr.m_ComponentMgr.getEntityDetails(Entity);
         auto& Archetype = *IDetails.m_pPool->m_pArchetype;
@@ -63,7 +63,8 @@ namespace xecs::persist::details
         for( auto pInfo : DataSpan )
         {
             if( pInfo->m_ReferenceMode == xecs::component::type::reference_mode::NO_REFERENCES
-             || xecs::component::type::IsComponentType<xecs::component::entity>(pInfo) )
+             || xecs::component::type::IsComponentType<xecs::component::entity>(pInfo)
+             || false == Include(*pInfo) )
                 continue;
 
             auto pData = IDetails.m_pPool->getComponentInSequenceByInfo( *pInfo, IDetails.m_PoolIndex, iSequence );
@@ -72,7 +73,7 @@ namespace xecs::persist::details
             {
                 pInfo->m_pReportReferencesFn( References, pData );
                 for( auto pRef : References )
-                    *pRef = Resolve( DecodeRef(*pRef) );
+                    *pRef = Remap( *pRef );
                 References.clear();
             }
             else
@@ -83,13 +84,26 @@ namespace xecs::persist::details
                 {
                     if( Data.getTypeGuid() == xproperty::settings::var_type<xecs::component::entity>::guid_v )
                     {
-                        const auto Encoded = DecodeRef( Data.get<xecs::component::entity>() );
-                        Data.get<xecs::component::entity>() = Resolve(Encoded);
+                        Data.get<xecs::component::entity>() = Remap( Data.get<xecs::component::entity>() );
                         xproperty::sprop::setProperty( SetError, pData, *pInfo->m_pPropertyTable, xproperty::sprop::container::prop{ pPropertyName, Data }, Context );
                     }
                 });
             }
         }
+    }
+
+    template< typename T_REMAP >
+    inline void RemapEntityReferences( xecs::game_mgr::instance& GameMgr, xecs::component::entity Entity, T_REMAP&& Remap ) noexcept
+    {
+        RemapEntityReferences( GameMgr, Entity, Remap, []( const xecs::component::type::info& ) noexcept { return true; } );
+    }
+
+    // A newly loaded entity: every encoded reference field's raw int64 replaced with the resolved live
+    // runtime entity - or a proper null (xecs::component::entity{}, NOT a bit-pattern 0) for an encoded 0.
+    template< typename T_RESOLVE >   // xecs::component::entity(std::int64_t Encoded) noexcept
+    inline void RemapLoadedEntityReferences( xecs::game_mgr::instance& GameMgr, xecs::component::entity Entity, T_RESOLVE&& Resolve ) noexcept
+    {
+        RemapEntityReferences( GameMgr, Entity, [&]( xecs::component::entity Reference ) noexcept { return Resolve( DecodeRef(Reference) ); } );
     }
 
     //-----------------------------------------------------------------------------------------
@@ -314,6 +328,8 @@ namespace xecs::persist::details
         const bool bIsPrefabInstance = std::find_if(Infos.begin(), Infos.end(), xecs::component::type::IsComponentType<xecs::editor::prefab_instance>) != Infos.end();
         if( false == bIsPrefabInstance ) return {};
 
+        // a file written before recipes has no Format row: it reads as 0 (see prefab_instance::m_Format)
+        OutTempPI.m_Format = 0;
         if( auto Err = SerializeOneComponent(TextFile, true, xecs::component::type::info_v<xecs::editor::prefab_instance>, reinterpret_cast<std::byte*>(&OutTempPI)); Err )
             return Err;
 
@@ -367,11 +383,19 @@ namespace xecs::persist::details
 
             bool bRemoved = false;
             for( auto& Diff : OutTempPI.m_ComponentDiffs )
-                if( Diff.m_bAdded == false && Diff.m_ComponentTypeGuid == pRootInfo->m_Guid.m_Value ) { bRemoved = true; break; }
+                if( Diff.m_bAdded == false && Diff.m_Member.empty() && Diff.m_ComponentTypeGuid == pRootInfo->m_Guid.m_Value ) { bRemoved = true; break; }
             if( bRemoved ) continue;
 
             OutArchetypeInfos.push_back(pRootInfo);
         }
+
+        // A recipe's file does not hold the root's children (its members are spawned, the scene's entities under it say so themselves): it
+        // gets the component when its prefab can have members (xecs::prefab::recipe::StageSceneInstances fills it).
+        if( OutTempPI.m_Format >= xecs::editor::prefab_instance::recipe_format_v
+         && ( RootDetails.m_pPool->findIndexComponentFromInfo(xecs::component::type::info_v<xecs::component::children>) >= 0
+           || RootDetails.m_pPool->findIndexComponentFromInfo(xecs::component::type::info_v<xecs::editor::prefab_instance>) >= 0 )
+         && std::find_if(OutArchetypeInfos.begin(), OutArchetypeInfos.end(), xecs::component::type::IsComponentType<xecs::component::children>) == OutArchetypeInfos.end() )
+            OutArchetypeInfos.push_back( &xecs::component::type::info_v<xecs::component::children> );
         return {};
     }
 
@@ -440,31 +464,6 @@ namespace xecs::persist::details
     }
 
     //-----------------------------------------------------------------------------------------
-    // Honor PI.m_HierarchyDiffs removals on a live instance root (nested place / re-instantiate).
-    // Deepest paths first so sibling indices stay stable while deleting.
-    //-----------------------------------------------------------------------------------------
-    inline void ApplyRemovedHierarchyDiffs( xecs::game_mgr::instance& GameMgr, xecs::component::entity InstanceRoot, const xecs::editor::prefab_instance& PI ) noexcept
-    {
-        std::vector<std::vector<std::uint32_t>> Removed;
-        for( auto& D : PI.m_HierarchyDiffs )
-            if( !D.m_bAdded && !D.m_MemberPath.empty() )
-                Removed.push_back(D.m_MemberPath);
-
-        std::sort(Removed.begin(), Removed.end(), [](const auto& A, const auto& B) noexcept
-        {
-            if( A.size() != B.size() ) return A.size() > B.size();
-            return std::lexicographical_compare(A.rbegin(), A.rend(), B.rbegin(), B.rend());
-        });
-
-        for( auto& Path : Removed )
-        {
-            const auto Target = ResolveMemberPath(GameMgr, InstanceRoot, Path);
-            if( Target.isValid() )
-                DeleteEntitySubtreeUnregistered(GameMgr, Target);
-        }
-    }
-
-    //-----------------------------------------------------------------------------------------
     // LOAD, step 3 of 3 - called after the per-component file read loop has finished (which must
     // itself have already moved the parsed prefab_instance component into the entity's own pool
     // slot - this function reads it back out from there, not from a temporary, since the read loop
@@ -526,6 +525,9 @@ namespace xecs::persist::details
             });
             if( !bFound || !CurrentValue.hasValue() ) continue;
 
+            // An entity's text is the reference as its file encodes it: only a loader that knows the file can write it (xecs::prefab::recipe).
+            if( CurrentValue.getTypeGuid() == xproperty::settings::var_type<xecs::component::entity>::guid_v ) continue;
+
             xproperty::any ParsedValue;
             if( CurrentValue.isEnum() )
             {
@@ -549,7 +551,9 @@ namespace xecs::persist::details
         }
     }
 
-    // Live version: Entity and the members its overrides address already exist.
+    // Live version, for what has no scene around it (a template's nested instance, an entity restored on its own): the overrides of Entity
+    // itself; the overrides of its members need the members' ids (xecs::prefab::recipe), but for an instance saved before recipes, whose
+    // child-index paths are walked as they always were.
     inline void ApplyPrefabInstancePropertyOverrides( xecs::game_mgr::instance& GameMgr, xecs::component::entity Entity ) noexcept
     {
         auto& EDetails = GameMgr.m_ComponentMgr.getEntityDetails(Entity);
@@ -563,6 +567,8 @@ namespace xecs::persist::details
         {
             auto* pOwnerInfo = xecs::component::mgr::findComponentTypeInfo( xecs::component::type::guid{CompOverride.m_ComponentTypeGuid} );
             if( pOwnerInfo == nullptr || pOwnerInfo->m_pPropertyTable == nullptr ) continue;
+            if( false == CompOverride.m_Member.empty() ) continue;
+            if( PI.m_Format != 0 && false == CompOverride.m_MemberPath.empty() ) continue;
 
             const auto TargetEntity = CompOverride.m_MemberPath.empty() ? Entity : ResolveMemberPath(GameMgr, Entity, CompOverride.m_MemberPath);
             if( TargetEntity.isValid() == false ) continue;
@@ -577,14 +583,15 @@ namespace xecs::persist::details
         }
     }
 
-    // Staged version, used while loading - before creation, so builder systems see the overridden
-    // values. A member path walks staged children lists, which still hold encoded references;
-    // FindStaged(Encoded) returns that member's staged_components (or nullptr).
+    // Staged version, used while loading an instance saved before recipes (prefab_instance::m_Format 0: its members are entity files of the
+    // scene) - before creation, so builder systems see the overridden values. A member path walks staged children lists, which still hold
+    // encoded references; FindStaged(Encoded) returns that member's staged_components (or nullptr). A recipe's overrides are applied by
+    // xecs::prefab::recipe::StageSceneInstances.
     template< typename T_FIND_STAGED >
     inline void ApplyPrefabInstancePropertyOverrides( staged_components& Root, T_FIND_STAGED&& FindStaged ) noexcept
     {
         auto* pPI = Root.find<xecs::editor::prefab_instance>();
-        if( pPI == nullptr ) return;
+        if( pPI == nullptr || pPI->m_Format != 0 ) return;
 
         for( auto& CompOverride : pPI->m_lComponents )
         {
@@ -605,222 +612,44 @@ namespace xecs::persist::details
         }
     }
 
-    //-----------------------------------------------------------------------------------------
-    // Unity's "Apply to Prefab" - the reverse direction of ApplyPrefabInstancePropertyOverrides
-    // above: propagates every override this ONE placed instance currently has recorded up into the
-    // source prefab's own live data (and re-saves the prefab asset), then clears this instance's own
-    // override bookkeeping (m_lComponents) - once applied, the instance's current value IS the new
-    // prefab default, so it's no longer "different from the prefab" by definition, exactly matching
-    // Unity clearing the bold/overridden indicator the moment Apply runs. PIRootEntity is whichever
-    // entity actually carries editor::prefab_instance (a group's outer root, or a nested instance's
-    // own root) - every override this ONE prefab_instance component tracks, across however many
-    // different group members m_MemberPath addresses, gets applied and cleared together as one unit
-    // (there is no per-property "Apply" in this pass, only "Apply everything on this instance" -
-    // Unity itself defaults to the same granularity via its top-level "Apply All" action; a future
-    // pass could add per-property Apply if ever needed, mirroring OnOverrideReset's own granularity,
-    // but that needs a NEW hook in the shared xproperty inspector library itself since it only
-    // exposes m_OnOverrideCheck/m_OnOverrideReset today - out of scope here to avoid touching a
-    // library other editors, e.g. E20/E21's own material/mesh-instance override UI, also depend on).
-    //
-    // Does NOT touch any OTHER already-placed instance of the same prefab that might be resident in
-    // an open scene right now - their own live data keeps whatever value they already have (matches
-    // Unity: Apply changes the prefab ASSET's default going forward, it doesn't retroactively touch
-    // sibling instances' own already-diverged values, only what they'd fall back to on a fresh
-    // instantiate/revert).
-    //-----------------------------------------------------------------------------------------
-    inline xerr ApplyInstanceOverridesToPrefab( xecs::game_mgr::instance& GameMgr, xecs::component::entity PIRootEntity ) noexcept
+    inline bool ComputePrefabInstanceSaveOverlay( xecs::game_mgr::instance&, xecs::component::entity, std::span<const xecs::component::type::info* const>, std::vector<const xecs::component::type::info*>&, std::vector<std::uint64_t>& ) noexcept;   // below
+
+    // RemapEntityReferences over what a member of a prefab writes when the prefab is saved: all its components,
+    // except - for a member that is itself a nested prefab instance - those its prefab owns (they are not in
+    // the file: they come from that prefab when it is loaded - ComputePrefabInstanceSaveOverlay).
+    template< typename T_REMAP >
+    inline void RemapWrittenReferences( xecs::game_mgr::instance& GameMgr, xecs::component::entity Member, T_REMAP&& Remap ) noexcept
     {
-        auto& PIDetails = GameMgr.m_ComponentMgr.getEntityDetails(PIRootEntity);
-        if( PIDetails.m_pPool == nullptr )
-            return xerr::create<xecs::game_mgr::state::FAILURE, "ApplyInstanceOverridesToPrefab: entity has no pool">();
-
-        const auto iPIType = PIDetails.m_pPool->findIndexComponentFromInfo( xecs::component::type::info_v<xecs::editor::prefab_instance> );
-        if( iPIType < 0 )
-            return xerr::create<xecs::game_mgr::state::FAILURE, "ApplyInstanceOverridesToPrefab: entity is not a prefab instance">();
-
-        auto& PI = *reinterpret_cast<xecs::editor::prefab_instance*>( &PIDetails.m_pPool->m_pComponent[iPIType][ PIDetails.m_PoolIndex.m_Value * xecs::component::type::info_v<xecs::editor::prefab_instance>.m_Size ] );
-
-        if( auto Err = GameMgr.m_PrefabMgr.EnsureLoaded(PI.m_PrefabInstance); Err )
-            return Err;
-
-        auto RootIt = GameMgr.m_PrefabMgr.m_PrefabList.find(PI.m_PrefabInstance.m_Instance.m_Value);
-        if( RootIt == GameMgr.m_PrefabMgr.m_PrefabList.end() )
-            return xerr::create<xecs::game_mgr::state::FAILURE, "ApplyInstanceOverridesToPrefab: source prefab root not resolved">();
-
-        // Components the instance root gained or lost relative to the prefab's root become the prefab's own (Unity's Apply also carries
-        // added/removed components). Compared live rather than read from PI.m_ComponentDiffs, which is only rebuilt when the instance is saved.
-        // The structural/engine components are never carried over, and neither are builder components (they are consumed when an entity is
-        // created, so a live instance does not carry them). AddOrRemoveComponents keeps the entity handle, so the prefab group's bookkeeping
-        // (m_PrefabList, m_PrefabGroups) stays valid.
+        std::vector<const xecs::component::type::info*> Written;
+        std::vector<std::uint64_t>                       PrefabOwned;
+        ComputePrefabInstanceSaveOverlay( GameMgr, Member, GameMgr.m_ComponentMgr.getEntityDetails(Member).m_pPool->m_pArchetype->getDataComponentInfos(), Written, PrefabOwned );
+        RemapEntityReferences( GameMgr, Member, Remap, [&]( const xecs::component::type::info& Info ) noexcept
         {
-            const auto IsStructural = []( const xecs::component::type::info& Info ) noexcept
-            {
-                return xecs::component::type::IsComponentType<xecs::component::entity>(&Info)
-                    || xecs::component::type::IsComponentType<xecs::component::parent>(&Info)
-                    || xecs::component::type::IsComponentType<xecs::component::children>(&Info)
-                    || xecs::component::type::IsComponentType<xecs::editor::prefab_instance>(&Info)
-                    || xecs::component::type::IsComponentType<xecs::prefab::root>(&Info)
-                    || xecs::component::type::IsComponentType<xecs::prefab::tag>(&Info)
-                    || Info.m_bBuilder;
-            };
-            const auto Gather = [&]( xecs::component::entity Entity ) noexcept
-            {
-                auto& Archetype = *GameMgr.m_ComponentMgr.getEntityDetails(Entity).m_pPool->m_pArchetype;
-                std::vector<const xecs::component::type::info*> Infos;
-                for( auto p : Archetype.getDataComponentInfos()  ) Infos.push_back(p);
-                for( auto p : Archetype.getShareComponentInfos() ) Infos.push_back(p);
-                AppendPersistentTagInfos( Archetype, Infos );
-                return Infos;
-            };
-            const auto Has = []( const std::vector<const xecs::component::type::info*>& Infos, const xecs::component::type::info& Info ) noexcept
-            {
-                return std::any_of( Infos.begin(), Infos.end(), [&]( auto p ) noexcept { return p->m_Guid == Info.m_Guid; } );
-            };
+            return std::any_of( Written.begin(), Written.end(), [&]( const xecs::component::type::info* p ) noexcept { return p->m_Guid == Info.m_Guid; } );
+        });
+    }
 
-            const auto InstInfos = Gather(PIRootEntity);
-            const auto PrefInfos = Gather(RootIt->second);
-            std::vector<const xecs::component::type::info*> Add, Sub;
-            for( auto p : InstInfos ) if( !IsStructural(*p) && !Has(PrefInfos, *p) ) Add.push_back(p);
-            for( auto p : PrefInfos ) if( !IsStructural(*p) && !Has(InstInfos, *p) ) Sub.push_back(p);
-
-            if( !Add.empty() || !Sub.empty() )
-            {
-                const auto Moved = GameMgr.AddOrRemoveComponents( RootIt->second, { Add.data(), Add.size() }, { Sub.data(), Sub.size() } );
-                if( Moved.isZombie() || Moved.m_Value != RootIt->second.m_Value )
-                    return xerr::create<xecs::game_mgr::state::FAILURE, "ApplyInstanceOverridesToPrefab: could not add/remove the components on the prefab root">();
-
-                // The new components start default constructed: give them the instance's values.
-                for( auto pInfo : Add )
-                {
-                    if( pInfo->m_TypeID == xecs::component::type::id::TAG ) continue;
-                    auto* pSrc = ResolveLiveComponentPointer( GameMgr, PIRootEntity, *pInfo );
-                    if( pSrc == nullptr ) continue;
-                    if( pInfo->m_TypeID == xecs::component::type::id::SHARE )
-                    {
-                        GameMgr.ReinternShareComponent( RootIt->second, *pInfo, pSrc );
-                        continue;
-                    }
-                    auto* pDst = ResolveLiveComponentPointer( GameMgr, RootIt->second, *pInfo );
-                    if( pDst == nullptr ) continue;
-                    if( pInfo->m_pCopyFn ) pInfo->m_pCopyFn( pDst, pSrc );
-                    else                   std::memcpy( pDst, pSrc, pInfo->m_Size );
-                }
-            }
-            PI.m_ComponentDiffs.clear();
-        }
-
-        for( auto& CompOverride : PI.m_lComponents )
-        {
-            auto* pOwnerInfo = xecs::component::mgr::findComponentTypeInfo( xecs::component::type::guid{CompOverride.m_ComponentTypeGuid} );
-            if( pOwnerInfo == nullptr || pOwnerInfo->m_pPropertyTable == nullptr ) continue;
-
-            const auto InstanceEntity = CompOverride.m_MemberPath.empty() ? PIRootEntity : ResolveMemberPath(GameMgr, PIRootEntity, CompOverride.m_MemberPath);
-            const auto PrefabEntity   = ResolveMemberPath(GameMgr, RootIt->second, CompOverride.m_MemberPath);
-            if( InstanceEntity.isValid() == false || PrefabEntity.isValid() == false ) continue;
-
-            auto& IDetails = GameMgr.m_ComponentMgr.getEntityDetails(InstanceEntity);
-            auto& PDetails = GameMgr.m_ComponentMgr.getEntityDetails(PrefabEntity);
-            if( IDetails.m_pPool == nullptr || PDetails.m_pPool == nullptr ) continue;
-
-            const auto iInstType = IDetails.m_pPool->findIndexComponentFromInfo(*pOwnerInfo);
-            const auto iPrefType = PDetails.m_pPool->findIndexComponentFromInfo(*pOwnerInfo);
-            if( iInstType < 0 || iPrefType < 0 ) continue;
-
-            auto* pInstData = &IDetails.m_pPool->m_pComponent[iInstType][ IDetails.m_PoolIndex.m_Value * pOwnerInfo->m_Size ];
-            auto* pPrefData = &PDetails.m_pPool->m_pComponent[iPrefType][ PDetails.m_PoolIndex.m_Value * pOwnerInfo->m_Size ];
-
-            for( auto& PropOverride : CompOverride.m_PropertyOverrides )
-            {
-                xproperty::settings::context Context{};
-                xproperty::any               CurrentValue;
-                bool                          bFound = false;
-                xproperty::sprop::collector( pInstData, *pOwnerInfo->m_pPropertyTable, Context, [&]( const char* pPropertyName, xproperty::any&& Value, const xproperty::type::members&, bool, const void* ) noexcept
-                {
-                    if( PropOverride.m_PropertyName == pPropertyName ) { CurrentValue = std::move(Value); bFound = true; }
-                });
-                if( bFound == false ) continue;
-
-                std::string SetError;
-                xproperty::sprop::setProperty( SetError, pPrefData, *pOwnerInfo->m_pPropertyTable, xproperty::sprop::container::prop{ PropOverride.m_PropertyName, CurrentValue }, Context );
-            }
-        }
-
-        // Hierarchy diffs: push structural instance changes into the Prefab ASSET (Unity Apply).
-        // 1) Resolve Added sources on the live INSTANCE (paths still valid there).
-        // 2) Apply removals on the PREFAB root (still has those members).
-        // 3) Shift each Added path for those removals, clone into the prefab under the parent path.
-        {
-            struct add_job
-            {
-                xecs::component::entity    m_Source{};
-                std::vector<std::uint32_t> m_MemberPath;
-            };
-            std::vector<add_job> Adds;
-            for (auto& D : PI.m_HierarchyDiffs)
-            {
-                if (!D.m_bAdded || D.m_MemberPath.empty()) continue;
-                const auto Src = ResolveMemberPath(GameMgr, PIRootEntity, D.m_MemberPath);
-                if (!Src.isValid()) continue;
-                Adds.push_back(add_job{ Src, D.m_MemberPath });
-            }
-
-            ApplyRemovedHierarchyDiffs(GameMgr, RootIt->second, PI);
-
-            auto& Group = GameMgr.m_PrefabMgr.m_PrefabGroups[PI.m_PrefabInstance.m_Instance.m_Value];
-            for (auto& J : Adds)
-            {
-                auto Path = J.m_MemberPath;
-                bool bDrop = false;
-                for (auto& D : PI.m_HierarchyDiffs)
-                {
-                    if (D.m_bAdded || D.m_MemberPath.empty()) continue;
-                    const auto& RemovedPath = D.m_MemberPath;
-                    if (Path.size() >= RemovedPath.size()
-                     && std::equal(RemovedPath.begin(), RemovedPath.end(), Path.begin()))
-                    { bDrop = true; break; }
-                    const auto PrefixLen = RemovedPath.size() - 1;
-                    const auto DeletedIndex = RemovedPath.back();
-                    if (Path.size() <= PrefixLen) continue;
-                    if (!std::equal(RemovedPath.begin(), RemovedPath.begin() + static_cast<std::ptrdiff_t>(PrefixLen), Path.begin())) continue;
-                    if (Path[PrefixLen] > DeletedIndex) --Path[PrefixLen];
-                }
-                if (bDrop || Path.empty()) continue;
-
-                const auto InsertIndex = Path.back();
-                std::vector<std::uint32_t> ParentPath(Path.begin(), Path.end() - 1);
-                const auto PrefabParent = ParentPath.empty()
-                    ? RootIt->second
-                    : ResolveMemberPath(GameMgr, RootIt->second, ParentPath);
-                if (!PrefabParent.isValid()) continue;
-
-                auto& PDetails = GameMgr.m_ComponentMgr.getEntityDetails(PrefabParent);
-                if (PDetails.m_pPool == nullptr) continue;
-                if (PDetails.m_pPool->findIndexComponentFromInfo(xecs::component::type::info_v<xecs::component::children>) < 0)
-                    continue;
-
-                auto NewChild = GameMgr.m_PrefabMgr.CloneEntityIntoPrefabGroup(J.m_Source, Group, /*bIsRoot=*/false);
-                if (!NewChild.isValid()) continue;
-
-                auto& ChildList = PDetails.m_pPool->getComponent<xecs::component::children>(PDetails.m_PoolIndex).m_List;
-                if (InsertIndex <= ChildList.size())
-                    ChildList.insert(ChildList.begin() + static_cast<std::ptrdiff_t>(InsertIndex), NewChild);
-                else
-                    ChildList.push_back(NewChild);
-
-                auto& CDetails = GameMgr.m_ComponentMgr.getEntityDetails(NewChild);
-                if (CDetails.m_pPool && CDetails.m_pPool->findIndexComponentFromInfo(xecs::component::type::info_v<xecs::component::parent>) >= 0)
-                    CDetails.m_pPool->getComponent<xecs::component::parent>(CDetails.m_PoolIndex).m_Value = PrefabParent;
-            }
-        }
-
-        // The instance no longer differs from the prefab by definition - clear the bookkeeping
-        // BEFORE saving the prefab (Save reads the prefab's own entities, not PI.m_lComponents, so
-        // ordering here only matters for when the in-memory override-indicator UI updates, not for
-        // save correctness).
-        PI.m_lComponents.clear();
-        PI.m_HierarchyDiffs.clear();
-
-        return GameMgr.m_PrefabMgr.Save(PI.m_PrefabInstance);
+    // What a reference held by a member of a prefab template may be (a template references only its own
+    // members - prefabs_plan.md, phase 1): null stays null, a handle pClones maps (an entity just cloned into
+    // the template) becomes its clone, a member of Group or a dead handle stays (mgr::Save writes a dead one as
+    // null), and a live entity outside the prefab becomes null, with a warning (Unity does the same: a prefab
+    // made from scene objects loses its references to the rest of the scene).
+    // pKnown (optional) maps more live entities to the template members they stand for (Apply: the instance's root and members).
+    inline xecs::component::entity KeepReferenceInsidePrefab
+    ( xecs::game_mgr::instance&                                             GameMgr
+    , const xecs::prefab::group_bookkeeping&                                Group
+    , const std::unordered_map<std::uint64_t, xecs::component::entity>*     pClones
+    , xecs::component::entity                                               Reference
+    , const std::unordered_map<std::uint64_t, xecs::component::entity>*     pKnown = nullptr
+    ) noexcept
+    {
+        if( false == Reference.isValid() ) return Reference;
+        if( pClones ) if( auto It = pClones->find(Reference.m_Value); It != pClones->end() ) return It->second;
+        if( pKnown  ) if( auto It = pKnown->find(Reference.m_Value);  It != pKnown->end()  ) return It->second;
+        if( Group.m_RuntimeToLocal.contains(Reference.m_Value) || false == GameMgr.m_ComponentMgr.isEntityValid(Reference) ) return Reference;
+        std::printf("[Prefab] WARNING: a member of a prefab referenced an entity outside the prefab (0x%llX) - the prefab keeps a null reference instead\n", static_cast<unsigned long long>(Reference.m_Value));
+        std::fflush(stdout);
+        return {};
     }
 
     //-----------------------------------------------------------------------------------------
@@ -927,27 +756,38 @@ namespace xecs::persist::details
 
     //-----------------------------------------------------------------------------------------
     // SAVE, step 2 of 2 - called from inside the caller's per-component write loop, only when about
-    // to write editor::prefab_instance's own scratch copy: recomputes ComponentDiffs from scratch
-    // (added = on this entity but not in the prefab's own set; removed = in the prefab's own set but
-    // not on this entity), prunes any property-override entry for a component that's no longer
-    // prefab-owned, and refreshes each remaining override's PropertyValueAsString from the entity's
-    // OWN live data (not the scratch copy - the live pool is what the ECS actually simulates with).
-    // Recomputed fresh every save rather than trusted from incrementally-maintained state, so it can
-    // never drift out of sync with reality the way hand-maintained bookkeeping can.
+    // to write editor::prefab_instance's own scratch copy: recomputes the root's ComponentDiffs from
+    // scratch (added = on this entity but not in the prefab's own set; removed = in the prefab's own set
+    // but not on this entity), prunes any root property-override entry for a component that's no longer
+    // prefab-owned, and refreshes each remaining root override's PropertyValueAsString from the entity's
+    // OWN live data (not the scratch copy - the live pool is what the ECS actually simulates with); an
+    // entity value is written as Encode gives it (the reference as this file encodes it, see
+    // xecs::prefab::recipe). Recomputed fresh every save rather than trusted from incrementally-maintained
+    // state, so it can never drift out of sync with reality the way hand-maintained bookkeeping can.
+    // What addresses a member (prefab_component_override::m_Member) is the recipe's: refreshed from the
+    // live members by xecs::prefab::recipe::RefreshRecipe when there are any (a scene), kept as it is
+    // otherwise (a nested instance in a prefab, whose members are not live). An instance saved before
+    // recipes (m_Format 0) keeps the old way: its paths walk its live children.
     //-----------------------------------------------------------------------------------------
+    template< typename T_ENCODE >   // bool(xecs::component::entity Target, std::int64_t& OutEncoded)
     inline void RefreshPrefabInstanceOverlayRecord
     ( xecs::game_mgr::instance& GameMgr
     , xecs::component::entity Entity
     , std::span<const xecs::component::type::info* const> DataSpan
     , const std::vector<std::uint64_t>& PrefabOwnedGuids
     , xecs::editor::prefab_instance& InOutScratchPI
+    , T_ENCODE&& Encode
     ) noexcept
     {
-        InOutScratchPI.m_ComponentDiffs.clear();
+        const bool bOld = InOutScratchPI.m_Format == 0;
+        const auto IsRootLevel = [&]( const auto& X ) noexcept { return X.m_Member.empty() && ( false == bOld || X.m_MemberPath.empty() ); };
+
+        std::erase_if( InOutScratchPI.m_ComponentDiffs, [&]( auto& D ) noexcept { return D.m_Member.empty(); } );
         for( auto pInfo2 : DataSpan )
         {
             if( xecs::component::type::IsComponentType<xecs::component::entity>(pInfo2) ) continue;
             if( xecs::component::type::IsComponentType<xecs::editor::prefab_instance>(pInfo2) ) continue;
+            if( false == bOld && ( xecs::component::type::IsComponentType<xecs::component::children>(pInfo2) || xecs::component::type::IsComponentType<xecs::component::parent>(pInfo2) ) ) continue;
             if( std::find(PrefabOwnedGuids.begin(), PrefabOwnedGuids.end(), pInfo2->m_Guid.m_Value) == PrefabOwnedGuids.end() )
                 InOutScratchPI.m_ComponentDiffs.push_back(xecs::editor::prefab_component_diff{ .m_ComponentTypeGuid = pInfo2->m_Guid.m_Value, .m_bAdded = true });
         }
@@ -962,23 +802,20 @@ namespace xecs::persist::details
 
         std::erase_if( InOutScratchPI.m_lComponents, [&]( auto& C ) noexcept
         {
-            return std::find(PrefabOwnedGuids.begin(), PrefabOwnedGuids.end(), C.m_ComponentTypeGuid) == PrefabOwnedGuids.end();
+            return IsRootLevel(C) && std::find(PrefabOwnedGuids.begin(), PrefabOwnedGuids.end(), C.m_ComponentTypeGuid) == PrefabOwnedGuids.end();
         });
 
         for( auto& CompOverride : InOutScratchPI.m_lComponents )
         {
+            if( false == CompOverride.m_Member.empty() ) continue;
+            if( false == bOld && false == CompOverride.m_MemberPath.empty() ) continue;
+
             auto* pOwnerInfo = xecs::component::mgr::findComponentTypeInfo( xecs::component::type::guid{CompOverride.m_ComponentTypeGuid} );
             if( pOwnerInfo == nullptr || pOwnerInfo->m_pPropertyTable == nullptr ) continue;
 
-            // CompOverride.m_MemberPath addresses a DIFFERENT entity than Entity (the PI-carrying
-            // one) whenever this override belongs to a non-root group member - reading Entity's own
-            // live data unconditionally here (as this used to) refreshes the override string from
-            // the WRONG entity's current value (e.g. the root's own Name instead of the actual
-            // overridden member's), silently corrupting the on-disk override the next time this
-            // entity is saved: this string, not the live component itself, is what a prefab-owned
-            // property's file record actually persists (SerializeOneComponent skips the owning
-            // component's own data for anything prefab-owned) - a second AI review caught this
-            // ("child picks up the root's value" after save+reload), confirmed via direct code read.
+            // An old (m_Format 0) override's path addresses a DIFFERENT entity than Entity (the PI-carrying one) whenever it belongs to a
+            // non-root member - reading Entity's own live data for it would refresh the string from the WRONG entity's value (a second AI
+            // review caught that once: "child picks up the root's value" after save+reload).
             const auto TargetEntity = CompOverride.m_MemberPath.empty() ? Entity : ResolveMemberPath(GameMgr, Entity, CompOverride.m_MemberPath);
             if( TargetEntity.isValid() == false ) continue;
             auto& TDetails = GameMgr.m_ComponentMgr.getEntityDetails(TargetEntity);
@@ -994,8 +831,25 @@ namespace xecs::persist::details
                 xproperty::sprop::collector( pOwnerLive, *pOwnerInfo->m_pPropertyTable, ValueContext, [&]( const char* pPropertyName, xproperty::any&& Value, const xproperty::type::members&, bool, const void* ) noexcept
                 {
                     if( PropOverride.m_PropertyName != pPropertyName ) return;
+                    if( Value.getTypeGuid() == xproperty::settings::var_type<xecs::component::entity>::guid_v )
+                    {
+                        std::int64_t N = 0;
+                        const auto   R = Value.get<xecs::component::entity>();
+                        if( R.isValid() && false == Encode(R, N) ) N = 0;
+                        PropOverride.m_PropertyValueAsString = std::format( "#{}", N );
+                        return;
+                    }
+                    using namespace xproperty::settings;
+                    const auto G     = Value.getTypeGuid();
+                    const bool bText = Value.isEnum()
+                                    || G == var_type<std::int32_t>::guid_v  || G == var_type<std::uint32_t>::guid_v || G == var_type<std::int16_t>::guid_v
+                                    || G == var_type<std::uint16_t>::guid_v || G == var_type<std::int8_t>::guid_v   || G == var_type<std::uint8_t>::guid_v
+                                    || G == var_type<float>::guid_v         || G == var_type<double>::guid_v        || G == var_type<std::string>::guid_v
+                                    || G == var_type<std::wstring>::guid_v  || G == var_type<std::uint64_t>::guid_v || G == var_type<std::int64_t>::guid_v
+                                    || G == var_type<bool>::guid_v          || G == var_type<xresource::full_guid>::guid_v;
+                    if( false == bText ) return;
                     std::array<char, 256> ValueBuffer{};
-                    const auto             ValueLen = Value.isEnum() ? EnumAnyToString(ValueBuffer, Value) : xproperty::settings::AnyToString(ValueBuffer, Value);
+                    const auto            ValueLen = Value.isEnum() ? EnumAnyToString(ValueBuffer, Value) : AnyToString(ValueBuffer, Value);
                     PropOverride.m_PropertyValueAsString.assign(ValueBuffer.data(), ValueLen > 0 ? static_cast<std::size_t>(ValueLen) : 0);
                 });
             }

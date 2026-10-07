@@ -1,6 +1,13 @@
 #include <filesystem>
 #include <format>
 
+// xecs_prefab_recipe_inline.h (included after this file): a nested instance's recipe on what CreatePrefabInstance made of it.
+namespace xecs::prefab::recipe
+{
+    inline void ApplyNestedRecipeLive( xecs::game_mgr::instance&, xecs::component::entity, const xecs::editor::prefab_instance& ) noexcept;
+    inline void ConvertNestedRecipe  ( xecs::game_mgr::instance&, xecs::component::entity ) noexcept;
+}
+
 namespace xecs::prefab
 {
     //--------------------------------------------------------------------------------------------------------------
@@ -477,6 +484,13 @@ namespace xecs::prefab
     ) __inline
     bool mgr::CreatePrefabInstance( int Count, xecs::prefab::guid PrefabGuid, T_CALLBACK&& Callback, bool bRemoveRoot, bool isVariant) noexcept
     {
+        // A prefab of the scene format spawns from its baked plan (Spawn: batched, built, nested prefabs flattened). The rest - a prefab made in code
+        // (CreatePrefab<T...>), a variant being made, the root left out, components added or removed - is the clone below.
+        if constexpr( std::is_same_v<T_ADD_TUPLE, std::tuple<>> && std::is_same_v<T_SUB_TUPLE, std::tuple<>> )
+        {
+            if( false == bRemoveRoot && false == isVariant && m_PrefabGroups.contains(PrefabGuid.m_Instance.m_Value) )
+                return false == Spawn( PrefabGuid, Count, std::forward<T_CALLBACK&&>(Callback) ).empty();
+        }
         if( auto Tuple = m_PrefabList.find(PrefabGuid.m_Instance.m_Value); Tuple == m_PrefabList.end() ) return false;
         else CreatePrefabInstance( Count, Tuple->second, std::forward<T_CALLBACK&&>(Callback), bRemoveRoot, isVariant);
         return true;
@@ -552,7 +566,7 @@ namespace xecs::prefab
         // the user explicitly removed, every time.
         bool bHasRemovals = false;
         for( auto& Diff : PI.m_ComponentDiffs )
-            if( Diff.m_bAdded == false ) { bHasRemovals = true; break; }
+            if( Diff.m_bAdded == false && Diff.m_Member.empty() ) { bHasRemovals = true; break; }
 
         xecs::component::entity NestedRoot;
         if( ExtraInfos.empty() && !bHasRemovals )
@@ -620,7 +634,7 @@ namespace xecs::prefab
 
             std::vector<const xecs::component::type::info*> RemovedInfos;
             for( auto& Diff : PI.m_ComponentDiffs )
-                if( Diff.m_bAdded == false )
+                if( Diff.m_bAdded == false && Diff.m_Member.empty() )
                     if( auto* pInfo = xecs::component::mgr::findComponentTypeInfo(xecs::component::type::guid{Diff.m_ComponentTypeGuid}) )
                         RemovedInfos.push_back(pInfo);
 
@@ -651,9 +665,8 @@ namespace xecs::prefab
         }
 
         Remap.insert( { Entity.m_Value, NestedRoot } );   // outer siblings referencing Entity still resolve
-        xecs::persist::details::ApplyPrefabInstancePropertyOverrides( m_GameMgr, NestedRoot );
-        // Same compositional pass as component m_bAdded=false: strip children the outer PI removed.
-        xecs::persist::details::ApplyRemovedHierarchyDiffs( m_GameMgr, NestedRoot, PI );
+        // The nested recipe on what was made: its members' component diffs, its overrides (addressed by member ids), its removals.
+        xecs::prefab::recipe::ApplyNestedRecipeLive( m_GameMgr, NestedRoot, PI );
         return NestedRoot;
     }
 
@@ -769,10 +782,10 @@ AddOrRemoveComponents
         //-----------------------------------------------------------------------------------------
         // On-disk path - the same real GUID-sharded Descriptors/Prefab/<b0>/<b1>/<guid>.desc/
         // convention xecs::scene::mgr/xecs::level::mgr use (see xecs_scene_inline.h's identical
-        // helper for the full rationale). A prefab group is always loaded/saved wholesale (unlike
-        // Scene, which needs incremental per-entity IO for potentially huge entity counts) - so unlike
-        // Scene's sharded entity_db, every member's data lives in ONE file (Entity.txt) directly in
-        // this folder, rewritten in full on every Save.
+        // helper for the full rationale). It holds a scene (prefabs_plan.md, phase 1): Descriptor.txt,
+        // entity_db/ and ComponentDeps.txt, as a Scene's folder does. A prefab is always loaded/saved
+        // wholesale (unlike Scene, which needs incremental per-entity IO for potentially huge entity
+        // counts). Before phase 1 every member lived in ONE file, Entity.txt (EnsureLoadedOldFormat).
         //-----------------------------------------------------------------------------------------
         inline std::wstring PrefabFolder( mgr& Mgr, guid PrefabGuid ) noexcept
         {
@@ -875,156 +888,8 @@ AddOrRemoveComponents
         }
 
         //-----------------------------------------------------------------------------------------
-        // One member's on-disk record - the same EntityInfo/ComponentTypes/SerializeOneComponent
-        // shape xecs::scene::mgr::SaveEntity/LoadEntity use, "PermanentId" renamed "LocalId", minus
-        // the Scene-only prefab-overlay bookkeeping (a prefab group member CAN itself be a nested
-        // prefab instance - xecs::persist::details::ComputePrefabInstanceSaveOverlay/
-        // DetectAndUnionPrefabInstance handle that identically either way).
-        //-----------------------------------------------------------------------------------------
-        inline xerr SaveGroupMember( xecs::game_mgr::instance& GameMgr, xecs::serializer::stream& TextFile, local_id Id, xecs::component::entity Entity, const group_bookkeeping& Group ) noexcept
-        {
-            auto& EDetails  = GameMgr.m_ComponentMgr.getEntityDetails(Entity);
-            auto& Archetype = *EDetails.m_pPool->m_pArchetype;
-            auto  DataSpan  = Archetype.getDataComponentInfos();
-            auto  ShareSpan = Archetype.getShareComponentInfos();
-            std::vector<const xecs::component::type::info*> AllComponentSpan;
-            AllComponentSpan.reserve(DataSpan.size() + ShareSpan.size());
-            for( auto p : DataSpan  ) AllComponentSpan.push_back(p);
-            for( auto p : ShareSpan ) AllComponentSpan.push_back(p);
-            xecs::persist::details::AppendPersistentTagInfos(Archetype, AllComponentSpan);
-
-            std::vector<const xecs::component::type::info*> Infos;
-            std::vector<std::uint64_t>                       PrefabOwnedGuids;
-            xecs::persist::details::ComputePrefabInstanceSaveOverlay( GameMgr, Entity, DataSpan, Infos, PrefabOwnedGuids );
-
-            // xecs::prefab::root never gets its own data section (its m_Guid is redundant with the
-            // file's own location, matching the original single-entity design) - only the root member
-            // ever carries this component at all, so this is a no-op for every other member.
-            std::erase_if( Infos, xecs::component::type::IsComponentType<xecs::prefab::root> );
-
-            local_id WriteId      = Id;
-            int      nComponents = static_cast<int>(Infos.size());
-            if( auto Err = TextFile.Record( "EntityInfo", [&]( xerr& Error ) noexcept
-                {
-                      (Error = TextFile.Field("LocalId",     WriteId))
-                    ||(Error = TextFile.Field("nComponents", nComponents));
-                }
-            ); Err ) return Err;
-
-            if( false == Infos.empty() )
-            {
-                if( auto Err = TextFile.Record( "ComponentTypes"
-                ,   [&]( std::size_t& C, xerr& ) noexcept { C = Infos.size(); }
-                ,   [&]( std::size_t i, xerr& Error ) noexcept
-                    {
-                        std::uint64_t V = Infos[i]->m_Guid.m_Value;
-                        Error = TextFile.Field("Guid", V);
-                    }
-                ); Err ) return Err;
-            }
-
-            // Same-group-only resolver - a prefab has no equivalent of Scene's declared-parent/
-            // external-ref-table for anything outside its own membership (see
-            // xecs::persist::details::ResolveReferenceForSave's own comment).
-            auto GroupResolve = [&]( xecs::component::entity Target, std::int64_t& OutEncoded ) noexcept -> bool
-            {
-                if( auto It = Group.m_RuntimeToLocal.find(Target.m_Value); It != Group.m_RuntimeToLocal.end() )
-                {
-                    OutEncoded = static_cast<std::int64_t>(It->second);
-                    return true;
-                }
-                return false;
-            };
-
-            for( auto pInfo : Infos )
-            {
-                // TAG: listed in ComponentTypes above, but has no data to write.
-                if( pInfo->m_TypeID == xecs::component::type::id::TAG ) continue;
-
-                std::printf("[Prefab::SaveGroupMember DEBUG] Id=%u writing component '%s' ReferenceMode=%d\n", Id, pInfo->m_pName, (int)pInfo->m_ReferenceMode);
-                std::fflush(stdout);
-                auto* pLive = xecs::persist::details::ResolveLiveComponentPointer( GameMgr, Entity, *pInfo );
-                assert(pLive != nullptr);
-                if( pLive == nullptr ) return xerr::create<xecs::game_mgr::state::FAILURE, "SaveGroupMember could not resolve a component instance">();
-
-                std::vector<std::byte> Scratch( pInfo->m_Size );
-                if( pInfo->m_pConstructFn ) pInfo->m_pConstructFn( Scratch.data() );
-                if( pInfo->m_pCopyFn ) pInfo->m_pCopyFn( Scratch.data(), pLive );
-                else                   std::memcpy( Scratch.data(), pLive, pInfo->m_Size );
-
-                if( pInfo->m_ReferenceMode != xecs::component::type::reference_mode::NO_REFERENCES )
-                {
-                    if( pInfo->m_ReferenceMode == xecs::component::type::reference_mode::BY_FUNCTION )
-                    {
-                        std::vector<xecs::component::entity*> References;
-                        pInfo->m_pReportReferencesFn( References, Scratch.data() );
-                        std::printf("[Prefab::SaveGroupMember DEBUG]  BY_FUNCTION reported %zu reference(s)\n", References.size());
-                        std::fflush(stdout);
-
-                        for( auto pRef : References )
-                        {
-                            std::int64_t Encoded = 0;
-                            if( false == xecs::persist::details::ResolveReferenceForSave(*pRef, Encoded, GroupResolve) )
-                            {
-                                // Debug: loud - referencing something outside this prefab's own group
-                                // is an authoring-time mistake. Release: fail gracefully rather than
-                                // crash a shipped game over a dangling ref.
-                                xassert(false);
-                                std::printf("[Prefab::SaveGroupMember] WARNING: reference target is outside this prefab's own group - encoding as null\n");
-                                std::fflush(stdout);
-                                Encoded = 0;
-                            }
-                            *pRef = xecs::persist::details::EncodeRef(Encoded);
-                        }
-                    }
-                    else
-                    {
-                        std::printf("[Prefab::SaveGroupMember DEBUG]  property-based (AUTO) reference scan starting\n");
-                        std::fflush(stdout);
-                        xproperty::settings::context Context{};
-                        std::string                  SetError;
-                        xproperty::sprop::collector( Scratch.data(), *pInfo->m_pPropertyTable, Context, [&]( const char* pPropertyName, xproperty::any&& Data, const xproperty::type::members&, bool, const void* ) noexcept
-                        {
-                            if( Data.getTypeGuid() == xproperty::settings::var_type<xecs::component::entity>::guid_v )
-                            {
-                                auto RawTarget = Data.get<xecs::component::entity>();
-                                std::printf("[Prefab::SaveGroupMember DEBUG]   found entity property '%s' Target=0x%llx valid=%d\n", pPropertyName, (unsigned long long)RawTarget.m_Value, RawTarget.isValid());
-                                std::fflush(stdout);
-                                std::int64_t Encoded = 0;
-                                if( false == xecs::persist::details::ResolveReferenceForSave(RawTarget, Encoded, GroupResolve) )
-                                {
-                                    xassert(false);
-                                    std::printf("[Prefab::SaveGroupMember] WARNING: reference target is outside this prefab's own group - encoding as null\n");
-                                    std::fflush(stdout);
-                                    Encoded = 0;
-                                }
-                                Data.get<xecs::component::entity>() = xecs::persist::details::EncodeRef(Encoded);
-                                xproperty::sprop::setProperty( SetError, Scratch.data(), *pInfo->m_pPropertyTable, xproperty::sprop::container::prop{ pPropertyName, Data }, Context );
-                            }
-                        });
-                        std::printf("[Prefab::SaveGroupMember DEBUG]  property-based (AUTO) reference scan done\n");
-                        std::fflush(stdout);
-                    }
-                }
-
-                if( xecs::component::type::IsComponentType<xecs::editor::prefab_instance>(pInfo) )
-                {
-                    auto& PI_Scratch = *reinterpret_cast<xecs::editor::prefab_instance*>(Scratch.data());
-                    xecs::persist::details::RefreshPrefabInstanceOverlayRecord( GameMgr, Entity, AllComponentSpan, PrefabOwnedGuids, PI_Scratch );
-                }
-
-                const auto Error = xecs::persist::details::SerializeOneComponent(TextFile, false, *pInfo, Scratch.data());
-                if( pInfo->m_pDestructFn ) pInfo->m_pDestructFn( Scratch.data() );
-                if( Error ) return Error;
-                std::printf("[Prefab::SaveGroupMember DEBUG]  component '%s' done\n", pInfo->m_pName);
-                std::fflush(stdout);
-            }
-
-            return {};
-        }
-
-        //-----------------------------------------------------------------------------------------
-        // Read-side counterpart of SaveGroupMember - mirrors xecs::scene::mgr::LoadEntity's own shape
+        // The OLD format's member reader (one record of Entity.txt, see EnsureLoadedOldFormat): the
+        // read-side counterpart of the SaveGroupMember that wrote it - mirrors xecs::scene::mgr::LoadEntity's own shape
         // via the same shared xecs::persist::details helpers, minus the Scene-only path/dependency
         // concerns. Every member gets xecs::prefab::tag added back (excluded from what SaveGroupMember
         // writes, same as the original single-entity design - a TAG component carries no data at all,
@@ -1038,11 +903,11 @@ AddOrRemoveComponents
         //-----------------------------------------------------------------------------------------
         inline xerr LoadGroupMember( xecs::game_mgr::instance& GameMgr, xecs::serializer::stream& TextFile, group_bookkeeping& Group, local_id RootLocalId, guid PrefabGuid ) noexcept
         {
-            local_id FileId      = invalid_local_id_v;
-            int      nComponents = 0;
+            std::uint32_t FileId32   = 0;                       // the old format is from before the ids were widened: 32 bits
+            int           nComponents = 0;
             if( auto Err = TextFile.Record( "EntityInfo", [&]( xerr& Error ) noexcept
                 {
-                      (Error = TextFile.Field("LocalId",     FileId))
+                      (Error = TextFile.Field("LocalId",     FileId32))
                     ||(Error = TextFile.Field("nComponents", nComponents));
                 }
             ); Err )
@@ -1051,6 +916,8 @@ AddOrRemoveComponents
                 std::fflush(stdout);
                 return Err;
             }
+
+            const local_id FileId = FileId32;
 
             std::vector<const xecs::component::type::info*> Infos( static_cast<std::size_t>(nComponents), nullptr );
             if( nComponents > 0 )
@@ -1065,7 +932,7 @@ AddOrRemoveComponents
                     }
                 ); Err )
                 {
-                    std::printf("[Prefab::LoadGroupMember] FileId=%u : failed reading ComponentTypes (%s)\n", FileId, std::string(Err.getMessage()).c_str());
+                    std::printf("[Prefab::LoadGroupMember] FileId=%llX : failed reading ComponentTypes (%s)\n", (unsigned long long)FileId, std::string(Err.getMessage()).c_str());
                     std::fflush(stdout);
                     return Err;
                 }
@@ -1082,7 +949,7 @@ AddOrRemoveComponents
             xecs::component::entity                          PrefabRootEntity{};
             if( auto Err = xecs::persist::details::DetectAndUnionPrefabInstance( GameMgr, TextFile, Infos, ArchetypeInfos, TempPI, PrefabRootEntity ); Err )
             {
-                std::printf("[Prefab::LoadGroupMember] FileId=%u : DetectAndUnionPrefabInstance failed (%s)\n", FileId, std::string(Err.getMessage()).c_str());
+                std::printf("[Prefab::LoadGroupMember] FileId=%llX : DetectAndUnionPrefabInstance failed (%s)\n", (unsigned long long)FileId, std::string(Err.getMessage()).c_str());
                 std::fflush(stdout);
                 return Err;
             }
@@ -1097,7 +964,7 @@ AddOrRemoveComponents
             xecs::persist::details::staged_components Staged( ArchetypeInfos );
 
             if( bIsPrefabInstance )
-                Staged.CopyFrom( GameMgr, PrefabRootEntity );
+                Staged.CopyFrom( GameMgr, PrefabRootEntity, { &xecs::component::type::info_v<xecs::component::children> } );     // the prefab's children are its own: an instance's are its members (or its file's, before recipes)
 
             for( auto pInfo : Infos )
             {
@@ -1112,7 +979,7 @@ AddOrRemoveComponents
 
                 if( auto Err = xecs::persist::details::SerializeOneComponent(TextFile, true, *pInfo, Staged.find(*pInfo)); Err )
                 {
-                    std::printf("[Prefab::LoadGroupMember] FileId=%u : component '%s' failed to read (%s)\n", FileId, pInfo->m_pName, std::string(Err.getMessage()).c_str());
+                    std::printf("[Prefab::LoadGroupMember] FileId=%llX : component '%s' failed to read (%s)\n", (unsigned long long)FileId, pInfo->m_pName, std::string(Err.getMessage()).c_str());
                     std::fflush(stdout);
                     return Err;
                 }
@@ -1137,10 +1004,182 @@ AddOrRemoveComponents
         }
     }
 
+    namespace details
+    {
+        //-----------------------------------------------------------------------------------------
+        // A prefab that did not load leaves nothing behind: its members (created so far) are deleted and
+        // its bookkeeping dropped, so the next EnsureLoaded starts clean instead of finding half a group.
+        //-----------------------------------------------------------------------------------------
+        inline void ForgetGroup( mgr& Mgr, guid PrefabGuid ) noexcept
+        {
+            auto It = Mgr.m_PrefabGroups.find(PrefabGuid.m_Instance.m_Value);
+            if( It == Mgr.m_PrefabGroups.end() ) return;
+            for( auto& [Id, Member] : It->second.m_LocalToRuntime )
+            {
+                auto E = Member;
+                if( Mgr.m_GameMgr.m_ComponentMgr.isEntityValid(E) ) Mgr.m_GameMgr.DeleteEntity(E);
+            }
+            Mgr.m_PrefabGroups.erase(It);
+        }
+
+        //-----------------------------------------------------------------------------------------
+        // The old format (before prefabs_plan.md phase 1): every member in one Entity.txt, after a
+        // PrefabGroupInfo record. Kept for one release (decision D4): a prefab read this way is converted
+        // in memory, and its next Save writes the scene format (UpgradeProject saves them all at once).
+        //-----------------------------------------------------------------------------------------
+        inline xerr EnsureLoadedOldFormat( mgr& Mgr, guid PrefabGuid, const std::wstring& Folder ) noexcept
+        {
+            xecs::serializer::stream TextFile;
+            if( auto Err = TextFile.Open( true, Folder + L"/Entity.txt", xtextfile::file_type::TEXT, xtextfile::flags{} ); Err )
+            {
+                std::printf("[Prefab::EnsureLoaded] Guid=%llX : failed to open Entity.txt (%s)\n", static_cast<unsigned long long>(PrefabGuid.m_Instance.m_Value), std::string(Err.getMessage()).c_str());
+                std::fflush(stdout);
+                return Err;
+            }
+
+            int           nMembers      = 0;
+            std::uint32_t RootLocalId32 = 0;                    // the old format is from before the ids were widened: 32 bits
+            if( auto Err = TextFile.Record( "PrefabGroupInfo", [&]( xerr& Error ) noexcept
+                {
+                      (Error = TextFile.Field("nMembers",    nMembers))
+                    ||(Error = TextFile.Field("RootLocalId", RootLocalId32));
+                }
+            ); Err )
+            {
+                std::printf("[Prefab::EnsureLoaded] Guid=%llX : failed to read PrefabGroupInfo (%s) - this prefab asset is almost certainly in the OLD single-entity on-disk format from before the multi-entity rework, and needs to be recreated (drag the entity onto the asset browser again to make a fresh one)\n", static_cast<unsigned long long>(PrefabGuid.m_Instance.m_Value), std::string(Err.getMessage()).c_str());
+                std::fflush(stdout);
+                return Err;
+            }
+            const local_id RootLocalId = RootLocalId32;
+            std::printf("[Prefab::EnsureLoaded] Guid=%llX : old format (Entity.txt), nMembers=%d RootLocalId=%llX\n", static_cast<unsigned long long>(PrefabGuid.m_Instance.m_Value), nMembers, static_cast<unsigned long long>(RootLocalId));
+            std::fflush(stdout);
+
+            auto& Group = Mgr.m_PrefabGroups[PrefabGuid.m_Instance.m_Value];
+
+            for( int i = 0; i < nMembers; ++i )
+            {
+                if( auto Err = LoadGroupMember( Mgr.m_GameMgr, TextFile, Group, RootLocalId, PrefabGuid ); Err )
+                {
+                    std::printf("[Prefab::EnsureLoaded] Guid=%llX : member %d failed (%s)\n", static_cast<unsigned long long>(PrefabGuid.m_Instance.m_Value), i, std::string(Err.getMessage()).c_str());
+                    std::fflush(stdout);
+                    ForgetGroup( Mgr, PrefabGuid );
+                    return Err;
+                }
+            }
+
+            auto RootIt = Group.m_LocalToRuntime.find(RootLocalId);
+            if( RootIt == Group.m_LocalToRuntime.end() )
+            {
+                ForgetGroup( Mgr, PrefabGuid );
+                return xerr::create<xecs::game_mgr::state::FAILURE, "Prefab group file's RootLocalId does not match any loaded member">();
+            }
+            const auto Root = RootIt->second;
+
+            // Load everything first, remap references once every member exists.
+            for( auto& Pair : Group.m_LocalToRuntime )
+            {
+                xecs::persist::details::RemapLoadedEntityReferences( Mgr.m_GameMgr, Pair.second, [&]( std::int64_t Encoded ) noexcept -> xecs::component::entity
+                {
+                    if( Encoded == 0 ) return xecs::component::entity{};
+                    // A prefab group has no equivalent of Scene's external-ref table - every reference
+                    // must target another member of the same group.
+                    if( Encoded <= 0 )
+                    {
+                        std::printf("[Prefab::EnsureLoaded] Guid=%llX : WARNING encoded reference %lld is not a same-group positive local id - encoding as null\n", static_cast<unsigned long long>(PrefabGuid.m_Instance.m_Value), static_cast<long long>(Encoded));
+                        std::fflush(stdout);
+                        return xecs::component::entity{};
+                    }
+                    auto It = Group.m_LocalToRuntime.find( static_cast<local_id>(Encoded) );
+                    return It != Group.m_LocalToRuntime.end() ? It->second : xecs::component::entity{};
+                });
+            }
+
+            // Only after every member is loaded AND remapped: a nested-instance member's override with a
+            // non-empty m_MemberPath needs a REAL children.m_List to walk (calling this any earlier treated
+            // raw, un-remapped reference data as a live entity handle and crashed hard). A nested recipe
+            // written before phase 3 has its paths turned into member ids first.
+            for( auto& Pair : Group.m_LocalToRuntime )
+            {
+                auto& Details = Mgr.m_GameMgr.m_ComponentMgr.getEntityDetails(Pair.second);
+                if( Details.m_pPool && Details.m_pPool->findIndexComponentFromInfo(xecs::component::type::info_v<xecs::editor::prefab_instance>) >= 0 )
+                {
+                    xecs::prefab::recipe::ConvertNestedRecipe( Mgr.m_GameMgr, Pair.second );
+                    xecs::persist::details::ApplyPrefabInstancePropertyOverrides( Mgr.m_GameMgr, Pair.second );
+                }
+            }
+
+            Mgr.m_PrefabList.insert({ PrefabGuid.m_Instance.m_Value, Root });
+            return {};
+        }
+    }
+
     //--------------------------------------------------------------------------------------------------------------
 
-    xecs::component::entity mgr::CloneEntityIntoPrefabGroup( xecs::component::entity Source, group_bookkeeping& Group, bool bIsRoot ) noexcept
+    xecs::component::entity mgr::CloneSubtreeIntoPrefab
+    ( xecs::component::entity                                               Source
+    , group_bookkeeping&                                                    Group
+    , bool                                                                  bIsRoot
+    , const std::unordered_map<std::uint64_t, xecs::component::entity>*     pKnown
+    , std::unordered_map<std::uint64_t, xecs::component::entity>*           pOutClones
+    , std::vector<outside_reference>*                                       pOutside
+    ) noexcept
     {
+        // The subtree is cloned, then each clone references the clones of what its source referenced - a raw copy kept the handles of the
+        // sources, which Save then found outside the prefab (an assert in Debug, a null in Release: prefabs_plan.md, phase 0, finding 2) - and
+        // each clone gets the name its source has in its scene (the prefab keeps its entities' names).
+        std::unordered_map<std::uint64_t, xecs::component::entity> Clones;
+        const auto NewEntity = CloneEntityIntoPrefabGroup( Source, Group, bIsRoot, &Clones );
+
+        for( auto& [SourceValue, Clone] : Clones )
+        {
+            // What leaves the group: listed (with its property path, when it has one) before it becomes null.
+            if( pOutside )
+            {
+                auto& D = m_GameMgr.m_ComponentMgr.getEntityDetails(Clone);
+                for( auto pInfo : D.m_pPool->m_pArchetype->getDataComponentInfos() )
+                {
+                    if( pInfo->m_ReferenceMode == xecs::component::type::reference_mode::NO_REFERENCES || pInfo->m_pPropertyTable == nullptr ) continue;
+                    if( xecs::component::type::IsComponentType<xecs::component::parent>(pInfo) || xecs::component::type::IsComponentType<xecs::component::children>(pInfo) ) continue;
+                    auto* pData = xecs::persist::details::ResolveLiveComponentPointer( m_GameMgr, Clone, *pInfo );
+                    if( pData == nullptr ) continue;
+                    xproperty::settings::context Context{};
+                    xproperty::sprop::collector( pData, *pInfo->m_pPropertyTable, Context, [&]( const char* pName, xproperty::any&& V, const xproperty::type::members&, bool, const void* ) noexcept
+                    {
+                        if( V.getTypeGuid() != xproperty::settings::var_type<xecs::component::entity>::guid_v ) return;
+                        const auto R = V.get<xecs::component::entity>();
+                        if( false == R.isValid() || Clones.contains(R.m_Value) || Group.m_RuntimeToLocal.contains(R.m_Value) || (pKnown && pKnown->contains(R.m_Value)) ) return;
+                        if( false == m_GameMgr.m_ComponentMgr.isEntityValid(R) ) return;
+                        pOutside->push_back({ .m_Member = Group.m_RuntimeToLocal.at(Clone.m_Value), .m_Component = pInfo->m_Guid.m_Value, .m_Path = pName, .m_Target = R });
+                    });
+                }
+            }
+
+            xecs::persist::details::RemapEntityReferences( m_GameMgr, Clone, [&]( xecs::component::entity R ) noexcept
+            {
+                return xecs::persist::details::KeepReferenceInsidePrefab( m_GameMgr, Group, &Clones, R, pKnown );
+            });
+
+            for( auto& pScene : m_GameMgr.m_SceneMgr.m_SceneInstances )
+            {
+                auto It = pScene->m_RuntimeToLocal.find(SourceValue);
+                if( It == pScene->m_RuntimeToLocal.end() ) continue;
+                if( auto Name = pScene->m_EntityNames.find(It->second); Name != pScene->m_EntityNames.end() )
+                    Group.m_EntityNames[ Group.m_RuntimeToLocal.at(Clone.m_Value) ] = Name->second;
+                break;
+            }
+        }
+        if( pOutClones ) *pOutClones = std::move(Clones);
+        return NewEntity;
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    xecs::component::entity mgr::CloneEntityIntoPrefabGroup( xecs::component::entity Source, group_bookkeeping& Group, bool bIsRoot, std::unordered_map<std::uint64_t, xecs::component::entity>* pClones ) noexcept
+    {
+        // The whole clone (the top call): see CloneSubtreeIntoPrefab.
+        if( pClones == nullptr )
+            return CloneSubtreeIntoPrefab( Source, Group, bIsRoot, nullptr, nullptr, nullptr );
+
         auto& SourceDetails   = m_GameMgr.m_ComponentMgr.getEntityDetails(Source);
         auto& SourceArchetype = *SourceDetails.m_pPool->m_pArchetype;
         auto  DataSpan        = SourceArchetype.getDataComponentInfos();
@@ -1171,12 +1210,14 @@ AddOrRemoveComponents
 
         auto& NewArchetype = m_GameMgr.getOrCreateArchetype( { Infos.data(), Infos.size() } );
 
-        // Created once, directly with Source's live DATA + SHARE values. parent/children are
-        // structural (rebuilt below). prefab::root is new here - Source never has it, so it stays
-        // default. editor::prefab_instance, if present, copies plain like any other DATA component.
+        // Created once, directly with Source's live DATA + SHARE values. children is structural
+        // (rebuilt below); parent is copied (what the child follows of its parent, m_Follow, is the
+        // author's - skipping it reset it to the default) and its link is set to the new parent below.
+        // prefab::root is new here - Source never has it, so it stays default.
+        // editor::prefab_instance, if present, copies plain like any other DATA component.
         xecs::persist::details::staged_components Staged( Infos );
-        Staged.CopyFrom( m_GameMgr, Source, { &xecs::component::type::info_v<xecs::component::parent>
-                                            , &xecs::component::type::info_v<xecs::component::children> } );
+        Staged.CopyFrom( m_GameMgr, Source, { &xecs::component::type::info_v<xecs::component::children> } );
+        if( auto* pParent = Staged.find<xecs::component::parent>() ) pParent->m_Value = {};      // the new parent is set by the caller
         auto NewEntity = Staged.Create(NewArchetype);
 
         // Mint and register BEFORE recursing into children below - a later reference-remap pass or
@@ -1184,6 +1225,7 @@ AddOrRemoveComponents
         const auto Id = details::NextFreeLocalId(Group);
         Group.m_LocalToRuntime[Id]                = NewEntity;
         Group.m_RuntimeToLocal[NewEntity.m_Value] = Id;
+        (*pClones)[Source.m_Value]                = NewEntity;
 
         // root.m_Guid is stamped by CreatePrefabFromEntity right after this call returns (the only
         // caller of a bIsRoot=true clone, and already knows PrefabGuid) - avoids threading an extra
@@ -1218,7 +1260,7 @@ AddOrRemoveComponents
             NewChildList.reserve(SourceChildList.size());
             for( auto& Child : SourceChildList )
             {
-                auto NewChild = CloneEntityIntoPrefabGroup( Child, Group, /*bIsRoot=*/false );
+                auto NewChild = CloneEntityIntoPrefabGroup( Child, Group, /*bIsRoot=*/false, pClones );
                 NewChildList.push_back(NewChild);
 
                 auto& NewChildDetails = m_GameMgr.m_ComponentMgr.getEntityDetails(NewChild);
@@ -1239,10 +1281,13 @@ AddOrRemoveComponents
 
     //--------------------------------------------------------------------------------------------------------------
 
-    guid mgr::CreatePrefabFromEntity( xecs::component::entity Source, guid PrefabGuid ) noexcept
+    guid mgr::CreatePrefabFromEntity( xecs::component::entity Source, guid PrefabGuid, std::vector<outside_reference>* pOutside, std::unordered_map<std::uint64_t, local_id>* pMemberIds ) noexcept
     {
+        InvalidateBaked();
         auto& Group = m_PrefabGroups[PrefabGuid.m_Instance.m_Value];
-        auto  Root  = CloneEntityIntoPrefabGroup( Source, Group, /*bIsRoot=*/true );
+        std::unordered_map<std::uint64_t, xecs::component::entity> Clones;
+        auto  Root  = CloneSubtreeIntoPrefab( Source, Group, /*bIsRoot=*/true, nullptr, &Clones, pOutside );
+        if( pMemberIds ) for( auto& [SourceValue, Clone] : Clones ) (*pMemberIds)[SourceValue] = Group.m_RuntimeToLocal.at(Clone.m_Value);
 
         auto& RootDetails = m_GameMgr.m_ComponentMgr.getEntityDetails(Root);
         RootDetails.m_pPool->getComponent<xecs::prefab::root>(RootDetails.m_PoolIndex).m_Guid = PrefabGuid;
@@ -1255,6 +1300,7 @@ AddOrRemoveComponents
 
     xerr mgr::Save( guid PrefabGuid ) noexcept
     {
+        InvalidateBaked();      // what is saved is what changed (Apply, MakePrefab, the Undo of an Apply): the next spawn bakes again
         auto It = m_PrefabList.find(PrefabGuid.m_Instance.m_Value);
         if( It == m_PrefabList.end() )
             return xerr::create<xecs::game_mgr::state::FAILURE, "prefab::mgr::Save: prefab is not resident - call EnsureLoaded/CreatePrefabFromEntity first">();
@@ -1266,56 +1312,90 @@ AddOrRemoveComponents
         details::CollectGroupMembers( m_GameMgr, RootEntity, Members );
         details::ReconcileGroupLocalIds( Group, Members );
 
-        const auto Folder = details::PrefabFolder(*this, PrefabGuid);
-        std::error_code Ec;
-        std::filesystem::create_directories( std::filesystem::path(Folder), Ec );
-
-        // The real, reflected descriptor - a read-only diagnostic listing of the union of every
-        // member's component types (not just the root's own).
-        descriptor Descriptor;
-        for( auto& Member : Members )
+        // The rules of a prefab, checked before anything is written: one root, every member descends from
+        // it (Members is the root's subtree, by construction), and what is written references only its own
+        // members. A reference to an entity that no longer exists (a member Apply Overrides removed) is a
+        // null one now; one to a live entity outside the prefab refuses the save (the paths that build a
+        // template keep their references inside: KeepReferenceInsidePrefab).
+        for( auto Member : Members )
         {
-            auto& MDetails = m_GameMgr.m_ComponentMgr.getEntityDetails(Member);
-            for( auto pInfo : MDetails.m_pPool->m_pArchetype->getDataComponentInfos() )
+            bool bOutside = false;
+            xecs::persist::details::RemapWrittenReferences( m_GameMgr, Member, [&]( xecs::component::entity R ) noexcept -> xecs::component::entity
             {
-                if( xecs::component::type::IsComponentType<xecs::component::entity>(pInfo) ) continue;
-                if( std::find(Descriptor.m_ComponentTypeGuids.begin(), Descriptor.m_ComponentTypeGuids.end(), pInfo->m_Guid.m_Value) == Descriptor.m_ComponentTypeGuids.end() )
-                    Descriptor.m_ComponentTypeGuids.push_back(pInfo->m_Guid.m_Value);
+                if( false == R.isValid() || Group.m_RuntimeToLocal.contains(R.m_Value) ) return R;
+                if( false == m_GameMgr.m_ComponentMgr.isEntityValid(R) ) return {};
+                bOutside = true;
+                return R;
+            });
+            if( bOutside )
+            {
+                std::printf("[Prefab::Save] Guid=%llX : member %s references an entity outside the prefab - nothing was written\n", static_cast<unsigned long long>(PrefabGuid.m_Instance.m_Value), xecs::scene::FormatPermanentId(Group.m_RuntimeToLocal.at(Member.m_Value)).c_str());
+                std::fflush(stdout);
+                return xerr::create<xecs::game_mgr::state::FAILURE, "prefab::mgr::Save: a member references an entity outside the prefab (nothing was written)">();
             }
         }
 
-        xproperty::settings::context Context;
-        if( auto Err = Descriptor.Serialize( false, Folder + L"/Descriptor.txt", Context ); Err )
-            return Err;
+        const auto Folder = details::PrefabFolder(*this, PrefabGuid);
 
-        // Written wholesale, always - a prefab group is always loaded/saved as one atomic unit (no
-        // per-entity incremental IO concern here the way Scene's m_PendingChanges exists for).
-        xecs::serializer::stream TextFile;
-        if( auto Err = TextFile.Open( false, Folder + L"/Entity.txt", xtextfile::file_type::TEXT, xtextfile::flags{ .m_isWriteFloats = true } ); Err )
-            return Err;
-
-        const auto RootLocalId = Group.m_RuntimeToLocal.at(RootEntity.m_Value);
-        int        nMembers    = static_cast<int>(Members.size());
-        local_id   WriteRootId = RootLocalId;
-        if( auto Err = TextFile.Record( "PrefabGroupInfo", [&]( xerr& Error ) noexcept
+        // Every member in the scene's entity format, references encoded as the member ids.
+        auto GroupResolve = [&]( xecs::component::entity Target, std::int64_t& OutEncoded ) noexcept -> bool
+        {
+            if( auto It2 = Group.m_RuntimeToLocal.find(Target.m_Value); It2 != Group.m_RuntimeToLocal.end() )
             {
-                  (Error = TextFile.Field("nMembers",    nMembers))
-                ||(Error = TextFile.Field("RootLocalId", WriteRootId));
+                OutEncoded = static_cast<std::int64_t>(It2->second);
+                return true;
             }
-        ); Err ) return Err;
-
+            return false;
+        };
         for( auto& Member : Members )
         {
             const auto Id = Group.m_RuntimeToLocal.at(Member.m_Value);
-            auto& MDetails2 = m_GameMgr.m_ComponentMgr.getEntityDetails(Member);
-            std::printf("[Prefab::Save DEBUG] member Entity=0x%llx Id=%u DataComponents:", (unsigned long long)Member.m_Value, Id);
-            for( auto pInfo : MDetails2.m_pPool->m_pArchetype->getDataComponentInfos() ) std::printf(" %s", pInfo->m_pName);
-            std::printf("\n");
-            std::fflush(stdout);
-            if( auto Err = details::SaveGroupMember( m_GameMgr, TextFile, Id, Member, Group ); Err )
+            if( auto Err = xecs::scene::details::WriteEntityFile( m_GameMgr, xecs::scene::details::EntityFileInFolder(Folder, Id), Id, Member, GroupResolve ); Err )
                 return Err;
-            std::printf("[Prefab::Save DEBUG] member Entity=0x%llx SaveGroupMember returned OK\n", (unsigned long long)Member.m_Value);
+        }
+
+        // The descriptor is written after the members it names, to a temp file and renamed over the real one
+        // (as the scene's): it is what says the folder holds the scene format.
+        descriptor Descriptor;
+        Descriptor.m_Root = Group.m_RuntimeToLocal.at(RootEntity.m_Value);
+        for( auto& [Id, Member] : Group.m_LocalToRuntime ) Descriptor.m_ActiveEntities.push_back(Id);
+        std::sort( Descriptor.m_ActiveEntities.begin(), Descriptor.m_ActiveEntities.end() );
+        for( auto& [Id, Name] : Group.m_EntityNames )
+            if( Group.m_LocalToRuntime.contains(Id) ) Descriptor.m_EntityNames.push_back({ .m_Id = Id, .m_Name = Name });
+        std::sort( Descriptor.m_EntityNames.begin(), Descriptor.m_EntityNames.end(), []( auto& A, auto& B ) noexcept { return A.m_Id < B.m_Id; } );
+        {
+            const auto RealPath = Folder + L"/Descriptor.txt";
+            const auto TempPath = RealPath + L".tmp";
+            xproperty::settings::context Context;
+            if( auto Err = Descriptor.Serialize( false, TempPath, Context ); Err )
+                return Err;
+            std::error_code RenameEc;
+            std::filesystem::rename( TempPath, RealPath, RenameEc );
+            if( RenameEc )
+                return xerr::create<xecs::game_mgr::state::FAILURE, "prefab::mgr::Save: wrote the temp descriptor but the atomic rename over the real one failed">();
+        }
+
+        // Best effort, as the scene's: a failure degrades a later compatibility check, it never fails the save.
+        if( auto Err = xecs::scene::details::WriteComponentDependencies( Folder + L"/ComponentDeps.txt"
+                     , xecs::scene::details::CollectComponentDependencies( m_GameMgr, Group.m_LocalToRuntime, m_GameMgr.m_SceneMgr.m_pModuleOfComponent, m_GameMgr.m_SceneMgr.m_pModuleOfComponentUser ) ); Err )
+        {
+            std::printf("[Prefab::Save] ComponentDeps.txt FAILED: %s\n", std::string(Err.getMessage()).c_str());
             std::fflush(stdout);
+        }
+
+        // What is not the prefab any more: the old one-file format, and the files of members that are gone.
+        std::error_code Ec;
+        std::filesystem::remove( std::filesystem::path(Folder + L"/Entity.txt"), Ec );
+        for( auto Entry = std::filesystem::recursive_directory_iterator( std::filesystem::path(Folder + L"/entity_db"), std::filesystem::directory_options::skip_permission_denied, Ec )
+           ; !Ec && Entry != std::filesystem::recursive_directory_iterator(); Entry.increment(Ec) )
+        {
+            if( false == Entry->is_regular_file(Ec) || Entry->path().extension() != L".entity" ) continue;
+            const auto Id = static_cast<local_id>( std::wcstoull( Entry->path().stem().c_str(), nullptr, 16 ) );
+            if( false == Group.m_LocalToRuntime.contains(Id) )
+            {
+                std::error_code RemoveEc;
+                std::filesystem::remove( Entry->path(), RemoveEc );
+            }
         }
 
         return {};
@@ -1325,98 +1405,87 @@ AddOrRemoveComponents
 
     xerr mgr::EnsureLoaded( guid PrefabGuid ) noexcept
     {
-        std::printf("[Prefab::EnsureLoaded] Guid=%llX : begin\n", static_cast<unsigned long long>(PrefabGuid.m_Instance.m_Value));
-        std::fflush(stdout);
-
         if( m_PrefabList.find(PrefabGuid.m_Instance.m_Value) != m_PrefabList.end() )
-        {
-            std::printf("[Prefab::EnsureLoaded] Guid=%llX : already resident\n", static_cast<unsigned long long>(PrefabGuid.m_Instance.m_Value));
-            std::fflush(stdout);
             return {};
-        }
 
         const auto Folder = details::PrefabFolder(*this, PrefabGuid);
 
-        xecs::serializer::stream TextFile;
-        if( auto Err = TextFile.Open( true, Folder + L"/Entity.txt", xtextfile::file_type::TEXT, xtextfile::flags{} ); Err )
+        // The descriptor says which format the folder holds: a Root is the scene format.
+        descriptor Descriptor;
         {
-            std::printf("[Prefab::EnsureLoaded] Guid=%llX : failed to open Entity.txt (%s)\n", static_cast<unsigned long long>(PrefabGuid.m_Instance.m_Value), std::string(Err.getMessage()).c_str());
-            std::fflush(stdout);
-            return Err;
+            const auto      Path = Folder + L"/Descriptor.txt";
+            std::error_code Ec;
+            xproperty::settings::context Context;
+            if( std::filesystem::exists( std::filesystem::path(Path), Ec ) && Descriptor.Serialize( true, Path, Context ) )
+                Descriptor.m_Root = invalid_local_id_v;
         }
+        if( Descriptor.m_Root == invalid_local_id_v )
+            return details::EnsureLoadedOldFormat( *this, PrefabGuid, Folder );
 
-        int      nMembers    = 0;
-        local_id RootLocalId = invalid_local_id_v;
-        if( auto Err = TextFile.Record( "PrefabGroupInfo", [&]( xerr& Error ) noexcept
-            {
-                  (Error = TextFile.Field("nMembers",    nMembers))
-                ||(Error = TextFile.Field("RootLocalId", RootLocalId));
-            }
-        ); Err )
+        // 1) Read every member into staging - none is created unless all of them read (a prefab loads whole
+        //    or not at all). Every member gets prefab::tag (a template: no system sees it, no builder runs on
+        //    it - see game_mgr::getBuildPlan), the root prefab::root.
+        const xecs::component::type::info* const Extra[] = { &xecs::component::type::info_v<xecs::prefab::tag>, &xecs::component::type::info_v<xecs::prefab::root> };
+        std::vector<xecs::scene::details::staged_entity> StagedMembers;
+        StagedMembers.reserve( Descriptor.m_ActiveEntities.size() );
+        bool bHasRoot = false;
+        for( auto Id : Descriptor.m_ActiveEntities )
         {
-            std::printf("[Prefab::EnsureLoaded] Guid=%llX : failed to read PrefabGroupInfo (%s) - this prefab asset is almost certainly in the OLD single-entity on-disk format from before this session's multi-entity rework, and needs to be recreated (drag the entity onto the asset browser again to make a fresh one)\n", static_cast<unsigned long long>(PrefabGuid.m_Instance.m_Value), std::string(Err.getMessage()).c_str());
-            std::fflush(stdout);
-            return Err;
-        }
-        std::printf("[Prefab::EnsureLoaded] Guid=%llX : PrefabGroupInfo read OK, nMembers=%d RootLocalId=%u\n", static_cast<unsigned long long>(PrefabGuid.m_Instance.m_Value), nMembers, RootLocalId);
-        std::fflush(stdout);
-
-        auto& Group = m_PrefabGroups[PrefabGuid.m_Instance.m_Value];
-
-        for( int i = 0; i < nMembers; ++i )
-        {
-            if( auto Err = details::LoadGroupMember( m_GameMgr, TextFile, Group, RootLocalId, PrefabGuid ); Err )
+            const bool bRoot  = Id == Descriptor.m_Root;
+            auto&      Staged = StagedMembers.emplace_back();
+            if( auto Err = xecs::scene::details::ReadEntityFile( m_GameMgr, xecs::scene::details::EntityFileInFolder(Folder, Id), Staged, std::span<const xecs::component::type::info* const>( Extra, bRoot ? 2u : 1u ) ); Err )
             {
-                std::printf("[Prefab::EnsureLoaded] Guid=%llX : member %d failed (%s)\n", static_cast<unsigned long long>(PrefabGuid.m_Instance.m_Value), i, std::string(Err.getMessage()).c_str());
+                std::printf("[Prefab::EnsureLoaded] Guid=%llX : member %s failed (%s)\n", static_cast<unsigned long long>(PrefabGuid.m_Instance.m_Value), xecs::scene::FormatPermanentId(Id).c_str(), std::string(Err.getMessage()).c_str());
                 std::fflush(stdout);
                 return Err;
             }
+            if( Staged.m_Id != Id )
+                return xerr::create<xecs::game_mgr::state::FAILURE, "Prefab member file says another id than the one it is filed under">();
+            if( bRoot )
+            {
+                Staged.m_pStaged->find<xecs::prefab::root>()->m_Guid = PrefabGuid;
+                bHasRoot = true;
+            }
         }
-        std::printf("[Prefab::EnsureLoaded] Guid=%llX : all %d member(s) loaded, resolving root\n", static_cast<unsigned long long>(PrefabGuid.m_Instance.m_Value), nMembers);
-        std::fflush(stdout);
+        if( false == bHasRoot )
+            return xerr::create<xecs::game_mgr::state::FAILURE, "Prefab descriptor's Root is not one of its ActiveEntities">();
 
-        auto RootIt = Group.m_LocalToRuntime.find(RootLocalId);
-        if( RootIt == Group.m_LocalToRuntime.end() )
-            return xerr::create<xecs::game_mgr::state::FAILURE, "Prefab group file's RootLocalId does not match any loaded member">();
+        // 2) Create them, and give them their names.
+        auto& Group = m_PrefabGroups[PrefabGuid.m_Instance.m_Value];
+        Group = {};
+        for( auto& Staged : StagedMembers )
+            xecs::scene::details::CreateStagedEntity( m_GameMgr, Group, Staged );
+        for( auto& N : Descriptor.m_EntityNames ) Group.m_EntityNames[N.m_Id] = std::move(N.m_Name);
 
-        // Second pass, mirroring Scene's own two-pass EnsureLoaded shape (load everything first,
-        // remap references once every member exists).
-        std::printf("[Prefab::EnsureLoaded] Guid=%llX : remapping references across %zu member(s)\n", static_cast<unsigned long long>(PrefabGuid.m_Instance.m_Value), Group.m_LocalToRuntime.size());
-        std::fflush(stdout);
+        // 3) References, once every member exists: a prefab references only its own members.
         for( auto& Pair : Group.m_LocalToRuntime )
         {
             xecs::persist::details::RemapLoadedEntityReferences( m_GameMgr, Pair.second, [&]( std::int64_t Encoded ) noexcept -> xecs::component::entity
             {
                 if( Encoded == 0 ) return xecs::component::entity{};
-                // A prefab group has no equivalent of Scene's external-ref table - every reference
-                // must target another member of the same group (see ResolveReferenceForSave's own
-                // save-side comment for why this stays that strict, at least for now).
-                if( Encoded <= 0 )
-                {
-                    std::printf("[Prefab::EnsureLoaded] Guid=%llX : WARNING encoded reference %lld is not a same-group positive local id - encoding as null\n", static_cast<unsigned long long>(PrefabGuid.m_Instance.m_Value), static_cast<long long>(Encoded));
-                    std::fflush(stdout);
-                    return xecs::component::entity{};
-                }
-                auto It = Group.m_LocalToRuntime.find( static_cast<local_id>(Encoded) );
-                return It != Group.m_LocalToRuntime.end() ? It->second : xecs::component::entity{};
+                auto It = Encoded > 0 ? Group.m_LocalToRuntime.find( static_cast<local_id>(Encoded) ) : Group.m_LocalToRuntime.end();
+                if( It != Group.m_LocalToRuntime.end() ) return It->second;
+                std::printf("[Prefab::EnsureLoaded] Guid=%llX : WARNING encoded reference %lld is not a member of the prefab - encoding as null\n", static_cast<unsigned long long>(PrefabGuid.m_Instance.m_Value), static_cast<long long>(Encoded));
+                std::fflush(stdout);
+                return xecs::component::entity{};
             });
         }
 
-        // Third pass, after every member is loaded AND remapped: only now is it safe to apply each
-        // nested-instance member's own recorded property overrides (a non-empty m_MemberPath needs a
-        // REAL children.m_List to walk) - see Scene::EnsureLoaded's own matching third pass for the
-        // full reasoning (calling this any earlier treated raw, un-remapped reference data as a live
-        // entity handle and crashed hard, no assert, just a silent exit).
+        // 4) Only after every member is loaded AND remapped: a nested-instance member's override with a
+        //    non-empty m_MemberPath needs a REAL children.m_List to walk (see Scene::EnsureLoaded's own
+        //    matching pass - calling this any earlier treated raw, un-remapped reference data as a live
+        //    entity handle and crashed hard, no assert, just a silent exit).
         for( auto& Pair : Group.m_LocalToRuntime )
         {
             auto& Details = m_GameMgr.m_ComponentMgr.getEntityDetails(Pair.second);
             if( Details.m_pPool && Details.m_pPool->findIndexComponentFromInfo(xecs::component::type::info_v<xecs::editor::prefab_instance>) >= 0 )
+            {
+                xecs::prefab::recipe::ConvertNestedRecipe( m_GameMgr, Pair.second );      // a nested recipe written before phase 3: its paths become member ids
                 xecs::persist::details::ApplyPrefabInstancePropertyOverrides( m_GameMgr, Pair.second );
+            }
         }
 
-        m_PrefabList.insert({ PrefabGuid.m_Instance.m_Value, RootIt->second });
-        std::printf("[Prefab::EnsureLoaded] Guid=%llX : end (success)\n", static_cast<unsigned long long>(PrefabGuid.m_Instance.m_Value));
-        std::fflush(stdout);
+        m_PrefabList.insert({ PrefabGuid.m_Instance.m_Value, Group.m_LocalToRuntime.at(Descriptor.m_Root) });
         return {};
     }
 }

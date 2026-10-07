@@ -1,5 +1,7 @@
 namespace xecs::prefab
 {
+    struct baked;       // xecs_prefab_recipe_inline.h
+
     struct mgr
     {
         mgr(xecs::game_mgr::instance& GameMgr ) : m_GameMgr{ GameMgr }{}
@@ -46,8 +48,10 @@ namespace xecs::prefab
         // so the existing CreatePrefabInstance(Count, PrefabGuid, ...) overload works on the result
         // unmodified - it already recurses through children on its own (see CreatePrefabInstance's own
         // "Scene-Prefab" branch).
+        // pOutside (optional) receives the references the members held to entities outside the group (the prefab keeps them null); pMemberIds
+        // (optional) each source entity's id in the prefab (keyed by the source's entity value).
         inline
-        guid        CreatePrefabFromEntity ( xecs::component::entity Source, guid PrefabGuid ) noexcept;
+        guid        CreatePrefabFromEntity ( xecs::component::entity Source, guid PrefabGuid, std::vector<outside_reference>* pOutside = nullptr, std::unordered_map<std::uint64_t, local_id>* pMemberIds = nullptr ) noexcept;
 
         // Loads (if not already resident in m_PrefabList) every member of a prefab group from disk
         // into live entities, wiring parent/children and remapping any intra-group reference back up
@@ -55,14 +59,16 @@ namespace xecs::prefab
         // prefab works even in a freshly-opened editor session. m_PrefabList still only ever ends up
         // holding the group's ROOT entity - every other member stays reachable transitively via
         // xecs::component::children from there, exactly as CreatePrefabInstance's own recursive walk
-        // already expects.
+        // already expects. Reads the scene format, or the old one (Entity.txt), which the next Save
+        // converts. A prefab that fails to load leaves nothing behind.
         inline
         xerr        EnsureLoaded          ( guid PrefabGuid ) noexcept;
 
         // Persists every member of a resident prefab group (found via m_PrefabList/m_PrefabGroups -
-        // call EnsureLoaded first if it might not be resident) to disk, as one atomic file (a prefab
-        // is always loaded/saved wholesale, unlike a Scene, so there's no per-entity incremental-IO
-        // concern to design around here).
+        // call EnsureLoaded first if it might not be resident) to disk, in the scene format: one entity
+        // file per member, the descriptor (root, members, names), ComponentDeps.txt (a prefab is always
+        // saved wholesale; the files of members that are gone, and an old-format Entity.txt, are removed).
+        // Refuses, writing nothing, when a member references a live entity outside the prefab.
         inline
         xerr        Save                  ( guid PrefabGuid ) noexcept;
 
@@ -78,21 +84,51 @@ namespace xecs::prefab
 
         // CreatePrefabFromEntity's recursive clone step - see its own definition's comment for the
         // full rationale (clone, not in-place mutation; local-id-before-recursion ordering; the
-        // nested-prefab-instance-is-a-leaf exclusion).
+        // nested-prefab-instance-is-a-leaf exclusion). Called without pClones, it is the whole clone:
+        // the references of the clones are then moved to the clones they point at, and the names the
+        // sources have in their scenes are given to the clones.
         inline
-        xecs::component::entity CloneEntityIntoPrefabGroup( xecs::component::entity Source, group_bookkeeping& Group, bool bIsRoot ) noexcept;
+        xecs::component::entity CloneEntityIntoPrefabGroup( xecs::component::entity Source, group_bookkeeping& Group, bool bIsRoot, std::unordered_map<std::uint64_t, xecs::component::entity>* pClones = nullptr ) noexcept;
+
+        // The whole clone of Source's subtree into Group as members (not a root): the clones' references are moved to the clones they point at,
+        // or to the template entity pKnown maps a live entity to (Apply: the instance's root and members), and are null otherwise (listed in
+        // pOutside when given); the clones get their sources' names. pOutClones (optional) receives source -> clone.
+        inline
+        xecs::component::entity CloneSubtreeIntoPrefab( xecs::component::entity Source, group_bookkeeping& Group, bool bIsRoot
+                                                      , const std::unordered_map<std::uint64_t, xecs::component::entity>* pKnown
+                                                      , std::unordered_map<std::uint64_t, xecs::component::entity>*       pOutClones
+                                                      , std::vector<outside_reference>*                                    pOutside ) noexcept;
+
+        // The baked plan of a prefab (documentation/Editors/prefabs_plan.md 3.5; xecs_prefab_recipe_inline.h): every entity a spawn makes, the
+        // nested recipes applied, where each member's references go. Made at the first need (EnsureLoaded first); nullptr for a prefab that is not
+        // a scene-format group (one made in code with CreatePrefab<T...>). Valid until a prefab is saved or made (InvalidateBaked).
+        inline
+        baked*      getBaked              ( guid PrefabGuid ) noexcept;
+
+        // Drops every baked plan (and their inert entities): called when a template may have changed (Save, CreatePrefabFromEntity). Every plan
+        // goes, because one prefab's plan holds the prefabs it nests.
+        inline
+        void        InvalidateBaked       ( void ) noexcept;
+
+        // Spawns Count instances of a prefab - the game's call, and the editor's InstantiatePrefab: each member made Count times in one call,
+        // built when the world runs builder systems (staged, as a scene load does), its parent, children and references written from the baked
+        // plan. Callback runs on each root once its instance is complete. Returns every entity made, member-major ([iNode * Count + k], node 0
+        // the roots), valid until the next spawn; empty when the prefab cannot be baked.
+        template< typename T_CALLBACK = xecs::tools::empty_lambda >
+        std::span<const xecs::component::entity> Spawn( guid PrefabGuid, int Count, T_CALLBACK&& Callback = xecs::tools::empty_lambda{} ) noexcept;
 
         xecs::game_mgr::instance&                                   m_GameMgr;
         std::unordered_map<std::uint64_t,xecs::component::entity>   m_PrefabList;
 
-        // Save/EnsureLoaded's own local-id bookkeeping for a resident prefab group's members - purely
-        // additive alongside m_PrefabList (which keeps its exact original shape/role, storing only the
-        // root), so every existing m_PrefabList reader keeps compiling unmodified. See
-        // xecs::prefab::group_bookkeeping's own comment.
+        // The resident templates as scenes (ids <-> live members, names) - alongside m_PrefabList (which
+        // keeps its exact original shape/role, storing only the root). See xecs::prefab::group_bookkeeping's
+        // own comment: the prefab manager's, never in the scene manager's list.
         std::unordered_map<std::uint64_t,group_bookkeeping>         m_PrefabGroups;
 
         // The project's root path, same convention as xecs::scene::mgr::m_ProjectPath /
         // xecs::level::mgr::m_ProjectPath.
         std::wstring                                                m_ProjectPath;
+
+        std::unordered_map<std::uint64_t,std::unique_ptr<baked>>    m_Baked;
     };
 }

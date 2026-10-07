@@ -1,3 +1,8 @@
+#include <format>
+#include <string>
+#include <cstdlib>
+#include <cwchar>
+
 namespace xecs::scene
 {
     // Scene is a full resource: its guid IS a real resource guid (xresource::def_guid), not a
@@ -32,8 +37,56 @@ namespace xecs::scene
     // A scene's local entity identity, stable across save/load. Dense and scoped to the owning
     // scene only - NOT globally unique by itself (the globally meaningful address is
     // {owning scene guid, permanent_id}, matching external_entity_address below).
-    using permanent_id = std::uint32_t;
+    //
+    // 64 bits (prefab plan phase 2): the ids minted for ordinary entities are still 32-bit GUID-like values, but an id
+    // may use the whole 63 bits below (phase 3 derives an instance member's id from a hash of the instance and the
+    // member). The top bit stays clear: an entity reference is an int64 whose positive values are ids of the same
+    // scene and whose negative values index the external table (xecs_reference_remap_inline.h), so an id has to be
+    // positive when seen as an int64.
+    using permanent_id = std::uint64_t;
     constexpr permanent_id invalid_permanent_id_v = 0;
+    constexpr permanent_id max_permanent_id_v     = 0x7FFFFFFFFFFFFFFFull;
+
+    // The text form of an id, in file names, commands and logs: 8 hex digits when it fits in 32 bits (the ids of before
+    // the widening print as they always did), 16 otherwise. ParsePermanentId takes either (and anything shorter).
+    inline std::string  FormatPermanentId ( permanent_id Id ) noexcept { return Id <= 0xFFFFFFFFull ? std::format( "{:08X}", Id )  : std::format( "{:016X}", Id ); }
+    inline std::wstring FormatPermanentIdW( permanent_id Id ) noexcept { return Id <= 0xFFFFFFFFull ? std::format( L"{:08X}", Id ) : std::format( L"{:016X}", Id ); }
+    inline permanent_id ParsePermanentId  ( const char*    pText ) noexcept { return static_cast<permanent_id>( std::strtoull ( pText, nullptr, 16 ) ); }
+    inline permanent_id ParsePermanentId  ( const wchar_t* pText ) noexcept { return static_cast<permanent_id>( std::wcstoull( pText, nullptr, 16 ) ); }
+
+    // The id of a member of a prefab instance in the scene of the instance (prefabs_plan.md 3.4, phase 3): derived from the instance's id
+    // and the member's address (xecs::editor::member_address), so it is the same every time the instance is spawned and is never stored.
+    // The root of the instance (empty address) is the instance's own id. 63 bits (the top bit is reserved, see max_permanent_id_v), and
+    // always above 32 bits: a minted id is a 32-bit value, so a derived id never takes one, and it prints with 16 hex digits.
+    inline permanent_id DeriveMemberId( permanent_id InstanceId, std::span<const std::uint64_t> Address ) noexcept
+    {
+        if( Address.empty() ) return InstanceId;
+
+        // FNV-1a over the bytes, then the splitmix64 finalizer (FNV alone mixes the high bits poorly)
+        std::uint64_t H = 0xCBF29CE484222325ull;
+        const auto Mix = [&]( std::uint64_t V ) noexcept
+        {
+            for( int i = 0; i < 8; ++i ) { H ^= (V >> (i * 8)) & 0xFF; H *= 0x100000001B3ull; }
+        };
+        Mix( InstanceId );
+        for( auto A : Address ) Mix( A );
+        H ^= H >> 30; H *= 0xBF58476D1CE4E5B9ull;
+        H ^= H >> 27; H *= 0x94D049BB133111EBull;
+        H ^= H >> 31;
+
+        H &= max_permanent_id_v;
+        if( H <= 0xFFFFFFFFull ) H |= 0x100000000ull;
+        return H;
+    }
+
+    // What the scene knows of an entity that is a member of an instance (never saved: rebuilt when the instance is spawned). m_Name is the name
+    // the member was spawned with (its prefab's): the scene saves a member's name only when it was renamed in the scene.
+    struct instance_member
+    {
+        permanent_id                    m_Root = invalid_permanent_id_v;    // the instance (the entity of the scene that carries the recipe)
+        std::vector<std::uint64_t>      m_Address;                          // xecs::editor::member_address
+        std::string                     m_Name;
+    };
 
     // What a negative entity-reference key (see xecs_scene_inline.h's Encode/DecodeRef) resolves
     // through: the parent scene that owns the target, and that target's permanent_id within it.
@@ -137,6 +190,10 @@ namespace xecs::scene
         std::unordered_map<permanent_id, xecs::component::entity>   m_LocalToRuntime;
         std::unordered_map<std::uint64_t, permanent_id>              m_RuntimeToLocal;   // keyed by entity.m_Value
         std::vector<xecs::component::entity>                         m_ExternalToRuntime; // indexed by (-key - 1)
+
+        // The members of the prefab instances of this scene, by their (derived) id: they are in m_LocalToRuntime like any entity (selection,
+        // references, undo and commands name them by id), but they have no file: a save writes their instance's recipe instead.
+        std::unordered_map<permanent_id, instance_member>             m_InstanceMembers;
 
         // What a Save needs to actually touch on disk, explicitly recorded by whoever performs the
         // mutation (mgr::MarkEntityNew/MarkEntityDirty/MarkEntityDeleted - called from E29's UI today,

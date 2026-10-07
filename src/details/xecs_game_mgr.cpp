@@ -573,7 +573,11 @@ namespace xecs::game_mgr
                                 {
                                     if( Error = xproperty::sprop::serializer::Stream<xecs::component::xproperty_atomic_types_tuple>( TextFile, pData, Table, Context ); Error )
                                     {
-                                        if( Error.getState<xtextfile::state>() == xtextfile::state::UNEXPECTED_RECORD )
+                                        // A component with no saved property (only DONT_SAVE ones: RenderTransform) has an empty table, and a binary file
+                                        // does not hold an empty table: the next record is another one, or - when it is the last table of the file - there
+                                        // is none (the end of the file: seen once the converted Soccer scene put the ball's pool last).
+                                        if( Error.getState<xtextfile::state>() == xtextfile::state::UNEXPECTED_RECORD
+                                         || Error.getState<xtextfile::state>() == xtextfile::state::UNEXPECTED_EOF )
                                         {
                                             printf( "Warning: We were expecting a table but we failed to find it (%s, record now: %s)\n", pP->m_ComponentInfos[iType]->m_pName, TextFile.getRecordName().data() );
                                             Error.clear();
