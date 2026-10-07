@@ -12,6 +12,13 @@
 // here too, matching that file's exact relative path (this file lives in the same details/ folder).
 #include "../../../xproperty/source/sprop/property_sprop_xtextfile_serializer.h"
 
+// A scene that is the document of a Prefab Editor (instance::m_bPrefabDocument) reads and writes its descriptor, and is saved, as a prefab: xecs_prefab_mgr_inline.h, included after this file.
+namespace xecs::prefab::document
+{
+    inline xerr LoadDescriptor( xecs::scene::mgr&, xecs::scene::instance&, std::vector<xecs::scene::permanent_id>& ) noexcept;
+    inline xerr Save          ( xecs::scene::mgr&, xecs::scene::instance& ) noexcept;
+}
+
 namespace xecs::scene
 {
     namespace details
@@ -40,7 +47,21 @@ namespace xecs::scene
             const auto Byte1 = FormatHex8( static_cast<std::uint8_t>((Value >> 8) & 0xFF) );
             return std::wstring(ProjectPath) + L"/Descriptors/Scene/" + Byte0 + L"/" + Byte1 + L"/" + FormatHexGuid(Value) + L".desc";
         }
-        inline std::wstring SceneFolder( mgr& Mgr, guid SceneGuid ) noexcept { return SceneFolder(std::wstring_view(Mgr.m_ProjectPath), SceneGuid); }
+
+        // The folder of a prefab (Descriptors/Prefab/<b0>/<b1>/<guid>.desc): a prefab is stored as a scene (prefabs_plan.md, phase 1), so a prefab document is read and written
+        // like a scene, from here. The same path formula xecs::prefab::details::PrefabFolder has.
+        inline std::wstring PrefabFolderOf( std::wstring_view ProjectPath, std::uint64_t Value ) noexcept
+        {
+            return std::wstring(ProjectPath) + L"/Descriptors/Prefab/" + FormatHex8( static_cast<std::uint8_t>( Value & 0xFF) ) + L"/" + FormatHex8( static_cast<std::uint8_t>((Value >> 8) & 0xFF) ) + L"/" + FormatHexGuid(Value) + L".desc";
+        }
+
+        // Where the scene's files are: its own folder, the folder of the prefab it is the document of, or the folder it was told to use for now (m_FolderOverride).
+        inline std::wstring SceneFolder( mgr& Mgr, guid SceneGuid ) noexcept
+        {
+            if( auto* pScene = Mgr.Find(SceneGuid); pScene && pScene->m_bPrefabDocument )
+                return pScene->m_FolderOverride.empty() ? PrefabFolderOf( Mgr.m_ProjectPath, SceneGuid.m_Instance.m_Value ) : pScene->m_FolderOverride;
+            return SceneFolder(std::wstring_view(Mgr.m_ProjectPath), SceneGuid);
+        }
 
         inline std::wstring DescriptorPath( mgr& Mgr, guid SceneGuid ) noexcept
         {
@@ -59,13 +80,13 @@ namespace xecs::scene
         {
             return SceneFolder(ProjectPath, SceneGuid) + L"/ComponentDeps.txt";
         }
-        inline std::wstring ComponentDepsPath( mgr& Mgr, guid SceneGuid ) noexcept { return ComponentDepsPath(std::wstring_view(Mgr.m_ProjectPath), SceneGuid); }
+        inline std::wstring ComponentDepsPath( mgr& Mgr, guid SceneGuid ) noexcept { return SceneFolder(Mgr, SceneGuid) + L"/ComponentDeps.txt"; }
 
         inline std::wstring EntityDbFolder( std::wstring_view ProjectPath, guid SceneGuid ) noexcept
         {
             return SceneFolder(ProjectPath, SceneGuid) + L"/entity_db";
         }
-        inline std::wstring EntityDbFolder( mgr& Mgr, guid SceneGuid ) noexcept { return EntityDbFolder(std::wstring_view(Mgr.m_ProjectPath), SceneGuid); }
+        inline std::wstring EntityDbFolder( mgr& Mgr, guid SceneGuid ) noexcept { return SceneFolder(Mgr, SceneGuid) + L"/entity_db"; }
 
         // One entity's file in the scene stored in ResourceFolder - a Scene's .desc folder, or a Prefab's (a prefab is stored as a scene).
         inline std::wstring EntityFileInFolder( std::wstring_view ResourceFolder, permanent_id Id ) noexcept
@@ -118,8 +139,13 @@ namespace xecs::scene
             std::vector<permanent_id> Ids;
             std::error_code           Ec;
 
-            const auto Root = std::filesystem::path( EntityDbFolder(ProjectPath, SceneGuid) );
-            if( false == std::filesystem::exists(Root, Ec) || Ec ) return Ids;
+            auto Root = std::filesystem::path( EntityDbFolder(ProjectPath, SceneGuid) );
+            if( false == std::filesystem::exists(Root, Ec) || Ec )
+            {
+                // the scene of a prefab opened in a Prefab Editor: its entity files are the prefab's
+                Root = std::filesystem::path( PrefabFolderOf(ProjectPath, SceneGuid.m_Instance.m_Value) + L"/entity_db" );
+                if( false == std::filesystem::exists(Root, Ec) || Ec ) return Ids;
+            }
 
             for( auto& Entry : std::filesystem::recursive_directory_iterator(Root, std::filesystem::directory_options::skip_permission_denied, Ec) )
             {
@@ -202,6 +228,8 @@ namespace xecs::scene
         // DiscoverEntityIds's own comment for why a directory scan is no longer the primary path).
         inline xerr LoadSceneDescriptor( mgr& Mgr, instance& Scene, std::vector<permanent_id>& OutActiveEntities ) noexcept
         {
+            if( Scene.m_bPrefabDocument ) return xecs::prefab::document::LoadDescriptor( Mgr, Scene, OutActiveEntities );
+
             const auto Path = DescriptorPath(Mgr, Scene.m_Guid);
             std::error_code Ec;
             if( false == std::filesystem::exists(Path, Ec) || Ec )
@@ -799,6 +827,9 @@ namespace xecs::scene
         if( pScene == nullptr )
             return xerr::create<xecs::game_mgr::state::FAILURE, "SaveScene: scene is not registered - call FindOrCreate first">();
 
+        // A prefab document is written whole, as a prefab (its rules checked first): there is no pending-change bookkeeping to resolve.
+        if( pScene->m_bPrefabDocument ) return xecs::prefab::document::Save( *this, *pScene );
+
         // Reconcile disk with the live scene HERE, at save time - not the moment an entity is created/
         // edited/deleted in the editor. On-disk state only ever changes as this one deliberate "sync
         // up with current state" step, never as a side effect of editing. Resolved from
@@ -956,10 +987,15 @@ namespace xecs::scene
     {
         std::vector<component_dependency> Result;
 
-        const auto Path = details::ComponentDepsPath(ProjectPath, SceneGuid);
+        auto Path = details::ComponentDepsPath(ProjectPath, SceneGuid);
         std::error_code ExistsEc;
         if( !std::filesystem::exists( std::filesystem::path(Path), ExistsEc ) )
-            return Result;
+        {
+            // A prefab opened in a Prefab Editor is a scene of its guid: its manifest is the prefab's (a prefab is stored as a scene).
+            Path = details::PrefabFolderOf( ProjectPath, SceneGuid.m_Instance.m_Value ) + L"/ComponentDeps.txt";
+            if( !std::filesystem::exists( std::filesystem::path(Path), ExistsEc ) )
+                return Result;
+        }
 
         xecs::serializer::stream TextFile;
         if( auto Err = TextFile.Open( true, Path, xtextfile::file_type::TEXT, xtextfile::flags{} ); Err )

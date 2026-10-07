@@ -1,5 +1,7 @@
 #include <filesystem>
 #include <format>
+#include <atomic>
+#include <unordered_set>
 
 // xecs_prefab_recipe_inline.h (included after this file): a nested instance's recipe on what CreatePrefabInstance made of it.
 namespace xecs::prefab::recipe
@@ -796,6 +798,20 @@ AddOrRemoveComponents
         }
 
         //-----------------------------------------------------------------------------------------
+        // The Game a prefab's folder says it plays with (empty: none, or the folder has no scene-format descriptor yet).
+        //-----------------------------------------------------------------------------------------
+        inline xecs::level::game_ref ReadDescriptorGame( const std::wstring& Folder ) noexcept
+        {
+            const auto      Path = Folder + L"/Descriptor.txt";
+            std::error_code Ec;
+            if( false == std::filesystem::exists( std::filesystem::path(Path), Ec ) ) return {};
+            descriptor                   Descriptor;
+            xproperty::settings::context Context;
+            if( Descriptor.Serialize( true, Path, Context ) ) return {};
+            return Descriptor.m_Game;
+        }
+
+        //-----------------------------------------------------------------------------------------
         // GUID-like minting (not sequential) for a prefab group member's local_id - same
         // merge-collision reasoning already applied to E29's own NextFreeEntityId (two branches
         // independently adding a child to the same group must not collide). Collision-checked
@@ -1300,6 +1316,29 @@ AddOrRemoveComponents
 
     xerr mgr::Save( guid PrefabGuid ) noexcept
     {
+        // Another editor holds the prefab as its document: it is the one writer. The saved state goes to a new folder and the editor is handed it.
+        if( m_pRedirect && m_pRedirect->m_pTakes && m_pRedirect->m_pDeliver && m_pRedirect->m_pTakes( m_pRedirect->m_pUser, PrefabGuid ) )
+        {
+            static std::atomic<std::uint32_t> s_Count{ 0 };
+            std::error_code Ec;
+            const auto Folder = ( std::filesystem::temp_directory_path(Ec) / std::format( L"xlion_prefab_{:X}_{}_{}", PrefabGuid.m_Instance.m_Value, reinterpret_cast<std::uintptr_t>(this), ++s_Count ) ).wstring();
+            std::filesystem::remove_all( std::filesystem::path(Folder), Ec );
+            std::filesystem::create_directories( std::filesystem::path(Folder), Ec );
+            if( auto Err = SaveTo( PrefabGuid, Folder ); Err ) return Err;
+            if( false == m_pRedirect->m_pDeliver( m_pRedirect->m_pUser, PrefabGuid, Folder ) )
+            {
+                std::filesystem::remove_all( std::filesystem::path(Folder), Ec );
+                return xerr::create<xecs::game_mgr::state::FAILURE, "prefab::mgr::Save: the editor that holds the prefab did not take the saved state and it could not be written to the prefab's folder either">();
+            }
+            return {};
+        }
+        return SaveTo( PrefabGuid, details::PrefabFolder( *this, PrefabGuid ) );
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    xerr mgr::SaveTo( guid PrefabGuid, const std::wstring& Folder ) noexcept
+    {
         InvalidateBaked();      // what is saved is what changed (Apply, MakePrefab, the Undo of an Apply): the next spawn bakes again
         auto It = m_PrefabList.find(PrefabGuid.m_Instance.m_Value);
         if( It == m_PrefabList.end() )
@@ -1335,8 +1374,6 @@ AddOrRemoveComponents
             }
         }
 
-        const auto Folder = details::PrefabFolder(*this, PrefabGuid);
-
         // Every member in the scene's entity format, references encoded as the member ids.
         auto GroupResolve = [&]( xecs::component::entity Target, std::int64_t& OutEncoded ) noexcept -> bool
         {
@@ -1357,6 +1394,7 @@ AddOrRemoveComponents
         // The descriptor is written after the members it names, to a temp file and renamed over the real one
         // (as the scene's): it is what says the folder holds the scene format.
         descriptor Descriptor;
+        Descriptor.m_Game = details::ReadDescriptorGame( details::PrefabFolder(*this, PrefabGuid) );      // the Game the prefab plays with is the editor's, not the template's: every save keeps it
         Descriptor.m_Root = Group.m_RuntimeToLocal.at(RootEntity.m_Value);
         for( auto& [Id, Member] : Group.m_LocalToRuntime ) Descriptor.m_ActiveEntities.push_back(Id);
         std::sort( Descriptor.m_ActiveEntities.begin(), Descriptor.m_ActiveEntities.end() );
@@ -1399,6 +1437,18 @@ AddOrRemoveComponents
         }
 
         return {};
+    }
+
+    //--------------------------------------------------------------------------------------------------------------
+
+    void mgr::DropTemplate( guid PrefabGuid ) noexcept
+    {
+        InvalidateBaked();
+        if( m_PrefabList.contains(PrefabGuid.m_Instance.m_Value) )
+        {
+            details::ForgetGroup( *this, PrefabGuid );
+            m_PrefabList.erase(PrefabGuid.m_Instance.m_Value);
+        }
     }
 
     //--------------------------------------------------------------------------------------------------------------
@@ -1486,6 +1536,158 @@ AddOrRemoveComponents
         }
 
         m_PrefabList.insert({ PrefabGuid.m_Instance.m_Value, Group.m_LocalToRuntime.at(Descriptor.m_Root) });
+        return {};
+    }
+}
+
+//------------------------------------------------------------------------------------------------------------------
+// A prefab opened in a Prefab Editor (documentation/Editors/prefabs_plan.md, phase 5). The editor makes a scene of the prefab's guid with
+// instance::m_bPrefabDocument set, and loads it like any scene (the scene manager reads the prefab's folder: a prefab is stored as a scene). The
+// entities are ordinary live ones - no prefab::tag, systems see them, the editor's commands edit them - and a nested instance is a recipe like in
+// a level. What is different is what the two functions below say: the descriptor is a prefab's, and a save is a prefab's save.
+//------------------------------------------------------------------------------------------------------------------
+namespace xecs::prefab::document
+{
+    namespace docdetails
+    {
+        inline bool HasParent( xecs::game_mgr::instance& GameMgr, xecs::component::entity Entity ) noexcept
+        {
+            auto& Details = GameMgr.m_ComponentMgr.getEntityDetails(Entity);
+            if( Details.m_pPool == nullptr ) return false;
+            if( Details.m_pPool->findIndexComponentFromInfo( xecs::component::type::info_v<xecs::component::parent> ) < 0 ) return false;
+            return Details.m_pPool->getComponent<xecs::component::parent>(Details.m_PoolIndex).m_Value.isValid();
+        }
+    }
+
+    xerr LoadDescriptor( xecs::scene::mgr& Mgr, xecs::scene::instance& Scene, std::vector<xecs::scene::permanent_id>& OutActiveEntities ) noexcept
+    {
+        Scene.m_ParentScenes.clear();
+        Scene.m_ExternalRefTable.clear();
+        Scene.m_Folders.clear();
+        Scene.m_EntityNames.clear();
+        OutActiveEntities.clear();
+
+        const auto      Path = xecs::scene::details::DescriptorPath( Mgr, Scene.m_Guid );
+        std::error_code Ec;
+        if( false == std::filesystem::exists( std::filesystem::path(Path), Ec ) )
+            return xerr::create<xecs::game_mgr::state::FAILURE, "Prefab document: the prefab has no Descriptor.txt">();
+
+        descriptor                   Descriptor;
+        xproperty::settings::context Context;
+        if( auto Err = Descriptor.Serialize( true, Path, Context ); Err )
+            return Err;
+        if( Descriptor.m_Root == xecs::scene::invalid_permanent_id_v )
+            return xerr::create<xecs::game_mgr::state::FAILURE, "Prefab document: the prefab is stored in the old format (one Entity.txt) - UpgradeProject converts it, then it opens">();
+
+        for( auto& N : Descriptor.m_EntityNames ) Scene.m_EntityNames[N.m_Id] = std::move(N.m_Name);
+        OutActiveEntities = std::move(Descriptor.m_ActiveEntities);
+        return {};
+    }
+
+    xerr Save( xecs::scene::mgr& Mgr, xecs::scene::instance& Scene ) noexcept
+    {
+        auto&                      GameMgr = Mgr.m_GameMgr;
+        const xecs::prefab::guid   Guid{ .m_Instance = Scene.m_Guid.m_Instance, .m_Type = xecs::prefab::type_guid_v };
+
+        // The rules of a prefab, checked before anything is written: one root (the one entity that has no parent: everything else descends from it), and what is written
+        // references only the prefab's own entities (a context scene's entity, say, is not part of it). A member of a nested instance is not written: its instance is.
+        std::vector<xecs::scene::permanent_id> Written, Roots;
+        for( auto& [Id, Entity] : Scene.m_LocalToRuntime )
+        {
+            if( Scene.m_InstanceMembers.contains(Id) ) continue;
+            Written.push_back(Id);
+            if( false == docdetails::HasParent( GameMgr, Entity ) ) Roots.push_back(Id);
+        }
+        std::sort( Written.begin(), Written.end() );
+        if( Roots.empty() )
+        {
+            std::printf("[Prefab::document::Save] Guid=%llX : the prefab has no entity without a parent - nothing was written\n", static_cast<unsigned long long>(Guid.m_Instance.m_Value));
+            std::fflush(stdout);
+            return xerr::create<xecs::game_mgr::state::FAILURE, "Prefab document: a prefab needs exactly one root (an entity with no parent) and it has none (nothing was written)">();
+        }
+        if( Roots.size() > 1 )
+        {
+            std::printf("[Prefab::document::Save] Guid=%llX : the prefab has %zu entities without a parent - nothing was written\n", static_cast<unsigned long long>(Guid.m_Instance.m_Value), Roots.size());
+            std::fflush(stdout);
+            return xerr::create<xecs::game_mgr::state::FAILURE, "Prefab document: a prefab has exactly one root (an entity with no parent) and it has more (nothing was written): put the others under it">();
+        }
+        for( auto Id : Written )
+        {
+            bool bOutside = false;
+            xecs::persist::details::RemapWrittenReferences( GameMgr, Scene.m_LocalToRuntime.at(Id), [&]( xecs::component::entity R ) noexcept -> xecs::component::entity
+            {
+                if( false == R.isValid() || Scene.m_RuntimeToLocal.contains(R.m_Value) ) return R;
+                if( false == GameMgr.m_ComponentMgr.isEntityValid(R) ) return {};
+                bOutside = true;
+                return R;
+            });
+            if( bOutside )
+            {
+                std::printf("[Prefab::document::Save] Guid=%llX : entity %s references an entity outside the prefab - nothing was written\n", static_cast<unsigned long long>(Guid.m_Instance.m_Value), xecs::scene::FormatPermanentId(Id).c_str());
+                std::fflush(stdout);
+                return xerr::create<xecs::game_mgr::state::FAILURE, "Prefab document: an entity references an entity outside the prefab (nothing was written)">();
+            }
+        }
+
+        // The entities (the scene's entity files, in the prefab's folder), then the descriptor that names them, then the manifest.
+        const auto      Folder = xecs::scene::details::SceneFolder( Mgr, Scene.m_Guid );
+        std::error_code Ec;
+        std::filesystem::create_directories( std::filesystem::path(Folder + L"/entity_db"), Ec );
+        for( auto Id : Written )
+            if( auto Err = Mgr.SaveEntity( Scene.m_Guid, Id, Scene.m_LocalToRuntime.at(Id) ); Err )
+                return Err;
+
+        descriptor Descriptor;
+        Descriptor.m_Game   = xecs::prefab::details::ReadDescriptorGame( xecs::scene::details::PrefabFolderOf( Mgr.m_ProjectPath, Guid.m_Instance.m_Value ) );      // the Game is the prefab's, not the document's: every save keeps it
+        Descriptor.m_Root   = Roots[0];
+        Descriptor.m_ActiveEntities = Written;
+        for( auto Id : Scene.m_UnloadedEntities )          // could not be loaded (a module that is not in the Game): still the prefab's, as a scene's
+            if( false == Scene.m_LocalToRuntime.contains(Id) ) Descriptor.m_ActiveEntities.push_back(Id);
+        std::sort( Descriptor.m_ActiveEntities.begin(), Descriptor.m_ActiveEntities.end() );
+        for( auto& [Id, Name] : Scene.m_EntityNames )      // a member of a nested instance has its prefab's name: kept only when renamed
+        {
+            if( false == Scene.m_LocalToRuntime.contains(Id) ) continue;
+            if( auto M = Scene.m_InstanceMembers.find(Id); M != Scene.m_InstanceMembers.end() && M->second.m_Name == Name ) continue;
+            Descriptor.m_EntityNames.push_back({ .m_Id = Id, .m_Name = Name });
+        }
+        std::sort( Descriptor.m_EntityNames.begin(), Descriptor.m_EntityNames.end(), []( auto& A, auto& B ) noexcept { return A.m_Id < B.m_Id; } );
+        {
+            const auto RealPath = Folder + L"/Descriptor.txt";
+            const auto TempPath = RealPath + L".tmp";
+            xproperty::settings::context Context;
+            if( auto Err = Descriptor.Serialize( false, TempPath, Context ); Err )
+                return Err;
+            std::filesystem::rename( TempPath, RealPath, Ec );
+            if( Ec )
+                return xerr::create<xecs::game_mgr::state::FAILURE, "Prefab document: wrote the temp descriptor but the atomic rename over the real one failed">();
+        }
+        if( auto Err = xecs::scene::details::WriteComponentDependencies( Folder + L"/ComponentDeps.txt"
+                     , xecs::scene::details::CollectComponentDependencies( GameMgr, Scene.m_LocalToRuntime, Mgr.m_pModuleOfComponent, Mgr.m_pModuleOfComponentUser ) ); Err )
+        {
+            std::printf("[Prefab::document::Save] ComponentDeps.txt FAILED: %s\n", std::string(Err.getMessage()).c_str());
+            std::fflush(stdout);
+        }
+
+        // What is not the prefab any more: the files of the entities that left it (and the old one-file format).
+        std::filesystem::remove( std::filesystem::path(Folder + L"/Entity.txt"), Ec );
+        std::unordered_set<xecs::scene::permanent_id> Active( Descriptor.m_ActiveEntities.begin(), Descriptor.m_ActiveEntities.end() );
+        for( auto Entry = std::filesystem::recursive_directory_iterator( std::filesystem::path(Folder + L"/entity_db"), std::filesystem::directory_options::skip_permission_denied, Ec )
+           ; !Ec && Entry != std::filesystem::recursive_directory_iterator(); Entry.increment(Ec) )
+        {
+            if( false == Entry->is_regular_file(Ec) || Entry->path().extension() != L".entity" ) continue;
+            const auto Id = static_cast<xecs::scene::permanent_id>( std::wcstoull( Entry->path().stem().c_str(), nullptr, 16 ) );
+            if( false == Active.contains(Id) )
+            {
+                std::error_code RemoveEc;
+                std::filesystem::remove( Entry->path(), RemoveEc );
+            }
+        }
+
+        Scene.m_PendingChanges.clear();
+
+        // Saved into its own folder (not a snapshot): the template this world may hold of the prefab, and the plans baked from it, are what the file said before.
+        if( Scene.m_FolderOverride.empty() )
+            GameMgr.m_PrefabMgr.DropTemplate( Guid );
         return {};
     }
 }

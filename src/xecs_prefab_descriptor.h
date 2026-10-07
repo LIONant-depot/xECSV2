@@ -13,12 +13,14 @@ namespace xecs::prefab
         xecs::scene::permanent_id                   m_Root           = xecs::scene::invalid_permanent_id_v;   // every other member descends from it
         std::vector<xecs::scene::permanent_id>      m_ActiveEntities = {};                                     // the members, sorted (the scene's meaning: load reads only these)
         std::vector<xecs::scene::entity_name>       m_EntityNames    = {};                                     // the names the members were given, sorted by id
+        xecs::level::game_ref                       m_Game           = {};                                     // the Game the prefab plays with in its Prefab Editor (empty: none, as a Level that names no Game); every save keeps it (prefabs_plan.md, D2)
 
         XPROPERTY_VDEF
         ( "Prefab", descriptor
         , obj_member<"Root",           &descriptor::m_Root,           member_flags<flags::SHOW_READONLY>>
         , obj_member<"ActiveEntities", &descriptor::m_ActiveEntities, member_flags<flags::SHOW_READONLY>>
         , obj_member<"EntityNames",    &descriptor::m_EntityNames,    member_flags<flags::SHOW_READONLY>>
+        , obj_member<"Game",           &descriptor::m_Game,           member_help<"The Game (the script modules and systems) this prefab plays with in its Prefab Editor. Empty: none.">>
         )
     };
     XPROPERTY_VREG(descriptor)

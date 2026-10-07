@@ -249,6 +249,16 @@ int main()
                 CHECK(Get<parent>(*W, Nested)->m_Value == Root);
                 if (B.isValid()) CHECK(Get<parent>(*W, B)->m_Value == Nested && Get<link>(*W, Get<link>(*W, B)->m_Target)->m_Target == Nested);
             }
+        // what the inspector's "revert to the prefab's value" goes back to for a member inside the nested instance: the baked member (the nested recipe's 55), not the inner prefab's own template member (3)
+        if (QB.m_Plan.m_Nodes.size() == 4)
+            for (std::size_t i = 2; i < 4; ++i)
+            {
+                const auto& Address = QB.m_Plan.m_Nodes[i].m_Address;
+                const auto Baked2   = W->m_PrefabMgr.FindBakedMember(Q, Address);
+                const auto Inner    = xecs::prefab::recipe::FindTemplate(*W, Q, Address);
+                CHECK(Baked2.isValid() && Inner.isValid());
+                if (Baked2.isValid() && Inner.isValid() && QB.m_Plan.m_Nodes[i].m_Template.m_Value == Inner.m_Value && X(*W, Inner) == 3.0f) CHECK(X(*W, Baked2) == 55.0f);
+            }
     }
 
     STEP("5. builders: a spawned member is built when the world runs them");

@@ -1669,6 +1669,14 @@ namespace xecs::prefab
     // Bakes a prefab: its plan (nested prefabs expanded), each member staged from its template with the nested recipes applied (as a scene load
     // stages an instance's members), then the table of its references, and its data placed in an inert entity with every reference null.
     //-----------------------------------------------------------------------------------------
+    xecs::component::entity mgr::FindBakedMember( guid PrefabGuid, std::span<const std::uint64_t> Address ) noexcept
+    {
+        auto* pBaked = getBaked( PrefabGuid );
+        if( pBaked == nullptr ) return {};
+        const int i = pBaked->m_Plan.Find( Address );
+        return i < 0 ? xecs::component::entity{} : pBaked->m_Nodes[i].m_Entity;
+    }
+
     baked* mgr::getBaked( guid PrefabGuid ) noexcept
     {
         if( auto It = m_Baked.find(PrefabGuid.m_Instance.m_Value); It != m_Baked.end() ) return It->second.get();

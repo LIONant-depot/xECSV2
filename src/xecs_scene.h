@@ -182,6 +182,13 @@ namespace xecs::scene
         // silently forgetting them (the entity file stays on disk, and the next load with the right game module brings them back).
         std::vector<permanent_id>                   m_UnloadedEntities;
 
+        // A prefab open in a Prefab Editor (prefabs_plan.md, phase 5): the scene IS the prefab - its guid is the prefab's, its files are the prefab's folder
+        // (Descriptors/Prefab/..., the scene format of phase 1), it loads and saves as a prefab (xecs::prefab::document) - and its entities are ordinary live ones.
+        bool                                        m_bPrefabDocument = false;
+        // Where the scene's files are read from and written to instead of its own folder (empty: its own). A prefab document only: a snapshot of the document, and the
+        // document read back from one (the Prefab Editor's undo of a change that came from another editor, one writer per document).
+        std::wstring                                m_FolderOverride;
+
         // Residency. A scene is unloadable only when both are zero.
         int                                         m_ExplicitRequests    = 0;
         int                                         m_DependentSceneCount = 0;

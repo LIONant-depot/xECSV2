@@ -69,8 +69,23 @@ namespace xecs::prefab
         // file per member, the descriptor (root, members, names), ComponentDeps.txt (a prefab is always
         // saved wholesale; the files of members that are gone, and an old-format Entity.txt, are removed).
         // Refuses, writing nothing, when a member references a live entity outside the prefab.
+        // When a prefab is open in a Prefab Editor, that editor is its one writer (prefabs_plan.md 3.7): a Save of the prefab from somewhere else (Apply Overrides of an
+        // instance in a Level, its undo) does not write the file - it writes the saved state to a new folder and hands that folder to the editor (m_pDeliver), which takes it as
+        // a change of its document. Null: every Save writes the prefab's own folder. Set by the editor on its world (xECSEditor::SetPrefabSaveRedirect).
+        struct save_redirect
+        {
+            void* m_pUser = nullptr;
+            bool (*m_pTakes  )( void* pUser, guid Prefab ) noexcept = nullptr;                                  // true: another editor holds the prefab as its document
+            bool (*m_pDeliver)( void* pUser, guid Prefab, const std::wstring& Folder ) noexcept = nullptr;      // the folder the saved state was written to (the receiver owns it from here); false: nobody took it, and nothing was written
+        };
+
         inline
         xerr        Save                  ( guid PrefabGuid ) noexcept;
+
+        // The same, to Folder instead of the prefab's own (a snapshot): the old-format file and the stray member files of the prefab's own folder are not cleaned (Folder is not it).
+        // Like Save it drops every baked plan first (the template is not touched, but one prefab's plan holds what it nests, so a save invalidates them all).
+        inline
+        xerr        SaveTo                ( guid PrefabGuid, const std::wstring& Folder ) noexcept;
 
         // mgr::CreatePrefabInstance(Entity,Remap,Parent,isVariant)'s new nested-prefab-instance
         // branch: when the entity being cloned during ordinary instancing itself carries
@@ -105,6 +120,16 @@ namespace xecs::prefab
         inline
         baked*      getBaked              ( guid PrefabGuid ) noexcept;
 
+        // The member of a prefab at an address as an instance of it starts from: the baked one, with the recipes of the prefab's nested instances applied. (recipe::FindTemplate gives the template
+        // member of the prefab that owns the member - the inner prefab's own value, without what the outer prefab's nested recipe says.) Invalid when the prefab has no such member; EnsureLoaded first.
+        inline
+        xecs::component::entity FindBakedMember( guid PrefabGuid, std::span<const std::uint64_t> Address ) noexcept;
+
+        // The resident template of a prefab and the plans baked from it are dropped: the prefab changed on disk (a Prefab Editor saved it) and the next instance of it reads the file again.
+        // Instances already made are untouched (live update of them is phase 6).
+        inline
+        void        DropTemplate          ( guid PrefabGuid ) noexcept;
+
         // Drops every baked plan (and their inert entities): called when a template may have changed (Save, CreatePrefabFromEntity). Every plan
         // goes, because one prefab's plan holds the prefabs it nests.
         inline
@@ -130,5 +155,7 @@ namespace xecs::prefab
         std::wstring                                                m_ProjectPath;
 
         std::unordered_map<std::uint64_t,std::unique_ptr<baked>>    m_Baked;
+
+        save_redirect*                                              m_pRedirect = nullptr;
     };
 }
