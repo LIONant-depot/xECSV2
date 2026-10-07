@@ -1332,7 +1332,9 @@ AddOrRemoveComponents
             }
             return {};
         }
-        return SaveTo( PrefabGuid, details::PrefabFolder( *this, PrefabGuid ) );
+        if( auto Err = SaveTo( PrefabGuid, details::PrefabFolder( *this, PrefabGuid ) ); Err ) return Err;
+        if( m_pRedirect && m_pRedirect->m_pSaved ) m_pRedirect->m_pSaved( m_pRedirect->m_pUser, PrefabGuid );
+        return {};
     }
 
     //--------------------------------------------------------------------------------------------------------------
@@ -1546,6 +1548,11 @@ AddOrRemoveComponents
 // entities are ordinary live ones - no prefab::tag, systems see them, the editor's commands edit them - and a nested instance is a recipe like in
 // a level. What is different is what the two functions below say: the descriptor is a prefab's, and a save is a prefab's save.
 //------------------------------------------------------------------------------------------------------------------
+namespace xecs::prefab::recipe
+{
+    inline int LiveUpdate( xecs::scene::mgr& Mgr, std::span<const xecs::prefab::guid> Changed, bool bDropTemplates ) noexcept;     // xecs_prefab_recipe_inline.h
+}
+
 namespace xecs::prefab::document
 {
     namespace docdetails
@@ -1685,9 +1692,10 @@ namespace xecs::prefab::document
 
         Scene.m_PendingChanges.clear();
 
-        // Saved into its own folder (not a snapshot): the template this world may hold of the prefab, and the plans baked from it, are what the file said before.
+        // Saved into its own folder (not a snapshot): the template this world may hold of the prefab, and the plans baked from it, are what the file said before. They
+        // are dropped, and the instances of the prefab in this world's other scenes (a context scene) are spawned again from the file (live update, prefabs_plan.md phase 6).
         if( Scene.m_FolderOverride.empty() )
-            GameMgr.m_PrefabMgr.DropTemplate( Guid );
+            xecs::prefab::recipe::LiveUpdate( Mgr, std::span<const xecs::prefab::guid>( &Guid, 1 ), /*bDropTemplates*/ true );
         return {};
     }
 }

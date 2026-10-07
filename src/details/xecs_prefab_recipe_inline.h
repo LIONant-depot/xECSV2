@@ -325,6 +325,7 @@ namespace xecs::prefab::recipe
             xecs::game_mgr::instance&   m_GameMgr;
             plan&                       m_Plan;
             xerr                        m_Error{};
+            std::vector<std::uint64_t>  m_Enclosing;        // the prefabs being expanded, outermost first: one of them nested again is a cycle (A holds B holds A), left out
 
             // The nested recipes whose members Address is under (the levels whose prefix is a proper prefix of it), deepest first.
             template< typename T_FN >
@@ -396,6 +397,20 @@ namespace xecs::prefab::recipe
             // reallocated: the second member of a nested prefab got a garbage address); PI is a live component, and loading the prefab makes entities.
             void ExpandNested( int n, const xecs::editor::prefab_instance PI, const address Address ) noexcept
             {
+                // A prefab that holds, however deep, an instance of itself would never end: the instance that closes the cycle is left out (its root stays, without members).
+                if( std::ranges::find( m_Enclosing, PI.m_PrefabInstance.m_Instance.m_Value ) != m_Enclosing.end() )
+                {
+                    std::printf("[Prefab::Plan] WARNING: prefab %llX holds an instance of itself through its nested prefabs (a cycle) - that instance's members are left out\n", static_cast<unsigned long long>(PI.m_PrefabInstance.m_Instance.m_Value));
+                    std::fflush(stdout);
+                    return;
+                }
+                m_Enclosing.push_back( PI.m_PrefabInstance.m_Instance.m_Value );
+                ExpandNestedOnce( n, PI, Address );
+                m_Enclosing.pop_back();
+            }
+
+            void ExpandNestedOnce( int n, const xecs::editor::prefab_instance& PI, const address& Address ) noexcept
+            {
                 if( auto Err = m_GameMgr.m_PrefabMgr.EnsureLoaded(PI.m_PrefabInstance); Err )
                 {
                     std::printf("[Prefab::Plan] WARNING: nested prefab %llX did not load (%s) - its members are left out\n", static_cast<unsigned long long>(PI.m_PrefabInstance.m_Instance.m_Value), std::string(Err.getMessage()).c_str());
@@ -456,8 +471,18 @@ namespace xecs::prefab::recipe
         Out.m_Levels.push_back( std::move(L0) );
 
         details::plan_builder B{ GameMgr, Out };
+        B.m_Enclosing.push_back( PrefabGuid.m_Instance.m_Value );
         B.Visit( 0, RootIt->second, -1, {} );
         return B.m_Error;
+    }
+
+    // True when an instance of Prefab is made of Used: it is Used, or it nests Used however deep (what a change of Used reaches; what a prefab cannot hold: itself).
+    inline bool Uses( xecs::game_mgr::instance& GameMgr, xecs::prefab::guid Prefab, xecs::prefab::guid Used ) noexcept
+    {
+        if( Prefab.m_Instance.m_Value == Used.m_Instance.m_Value ) return true;
+        plan P;
+        if( MakePlan(GameMgr, Prefab, P) ) return false;
+        return std::ranges::any_of( P.m_Levels, [&]( const level& L ) noexcept { return L.m_Prefab.m_Instance.m_Value == Used.m_Instance.m_Value; } );
     }
 
     // The template entity at an address of a prefab (what a member of an instance starts from), or an invalid entity.
@@ -1368,13 +1393,227 @@ namespace xecs::prefab::recipe
     }
 
     //-----------------------------------------------------------------------------------------
+    // Live update (documentation/Editors/prefabs_plan.md 3.6, phase 6): the instances in a world's scenes that are made of a prefab that changed (it
+    // is theirs, or one they nest) are spawned again from it with their recipes - what a save and a load of their scene would make of them, without
+    // either: nothing is written to the scene's files and nothing is marked to be (the scene does not turn dirty). Members keep their ids (derived),
+    // so the references to them, the selection and undo still name them; the entities of the scene under a member stay, under the member as it is
+    // now; a member the prefab lost is gone, and a reference to it is null.
+    // In two halves, because a recipe is refreshed against the template it was made from (a component or a member the prefab gains must not look
+    // like one the instance removed): PrepareLiveUpdate, before the template changes, refreshes each such recipe and writes each such instance's
+    // root as its scene's file would hold it, to a folder of its own; FinishLiveUpdate, after the change, reads them back against the prefab as it is
+    // now and replaces each instance. bDropTemplates: the change is on disk (another editor saved it), the templates of the changed prefabs are read
+    // again; otherwise the templates in memory are already the new ones (an Apply, its undo). A Play world is not for this: a running game keeps
+    // what it started with (the editor does not call it there).
+    //-----------------------------------------------------------------------------------------
+    struct live_update
+    {
+        struct item
+        {
+            xecs::scene::guid           m_Scene{};
+            xecs::scene::permanent_id   m_Root = xecs::scene::invalid_permanent_id_v;
+            std::wstring                m_File;
+        };
+        struct renamed                                          // an entity of a scene that took another id in between (Apply: an entity that joined the prefab)
+        {
+            xecs::scene::guid           m_Scene{};
+            xecs::scene::permanent_id   m_Old = xecs::scene::invalid_permanent_id_v;
+            xecs::scene::permanent_id   m_New = xecs::scene::invalid_permanent_id_v;
+        };
+
+        std::vector<xecs::prefab::guid> m_Changed;
+        std::vector<item>               m_Items;
+        std::vector<renamed>            m_Renamed;
+        std::wstring                    m_Folder;               // removed with this
+
+        live_update() = default;
+        live_update( const live_update& ) = delete;
+        live_update& operator=( const live_update& ) = delete;
+        live_update( live_update&& O ) noexcept : m_Changed(std::move(O.m_Changed)), m_Items(std::move(O.m_Items)), m_Renamed(std::move(O.m_Renamed)), m_Folder(std::exchange(O.m_Folder, {})) {}
+       ~live_update() { if( false == m_Folder.empty() ) { std::error_code Ec; std::filesystem::remove_all( std::filesystem::path(m_Folder), Ec ); } }
+    };
+
+    // ExceptScene/ExceptRoot: an instance left out (the one an Apply comes from: it is the change).
+    inline live_update PrepareLiveUpdate( xecs::scene::mgr& Mgr, std::span<const xecs::prefab::guid> Changed, xecs::scene::guid ExceptScene = {}, xecs::scene::permanent_id ExceptRoot = xecs::scene::invalid_permanent_id_v ) noexcept
+    {
+        live_update U;
+        U.m_Changed.assign( Changed.begin(), Changed.end() );
+        auto&      GameMgr   = Mgr.m_GameMgr;
+        const auto IsChanged = [&]( xecs::prefab::guid G ) noexcept { return std::ranges::any_of( Changed, [&]( const xecs::prefab::guid& C ) noexcept { return C.m_Instance.m_Value == G.m_Instance.m_Value; } ); };
+
+        for( auto& pScene : Mgr.m_SceneInstances )
+        {
+            if( pScene == nullptr || pScene->m_State != xecs::scene::state::Active ) continue;
+            auto& Scene = *pScene;
+
+            std::vector<std::pair<xecs::scene::permanent_id, xecs::prefab::guid>> Roots;
+            for( auto& [Id, E] : Scene.m_LocalToRuntime )
+            {
+                if( Scene.m_InstanceMembers.contains(Id) || false == GameMgr.m_ComponentMgr.isEntityValid(E) ) continue;
+                if( Id == ExceptRoot && Scene.m_Guid == ExceptScene ) continue;
+                auto* pPI = details::LiveComponent<xecs::editor::prefab_instance>( GameMgr, E );
+                if( pPI && pPI->m_Format != 0 ) Roots.push_back({ Id, pPI->m_PrefabInstance });
+            }
+            std::ranges::sort( Roots, {}, &std::pair<xecs::scene::permanent_id, xecs::prefab::guid>::first );
+
+            // As the scene writes a reference; what it cannot write (a dead entity) is null, as a save and a load would leave it.
+            const auto Resolve = [&]( xecs::component::entity T, std::int64_t& Out ) noexcept
+            {
+                if( xecs::scene::details::ResolveReferenceInScene( Mgr, Scene, T, Out ) ) return true;
+                Out = 0;
+                return true;
+            };
+
+            for( auto& [Id, Guid] : Roots )
+            {
+                const auto* pBaked = GameMgr.m_PrefabMgr.getBaked( Guid );
+                if( pBaked == nullptr ) continue;
+                if( std::ranges::none_of( pBaked->m_Plan.m_Levels, [&]( const level& L ) noexcept { return IsChanged(L.m_Prefab); } ) ) continue;
+
+                RefreshRecipe( GameMgr, Scene, Id, Resolve );
+                if( U.m_Folder.empty() )
+                {
+                    static std::atomic<std::uint32_t> s_Count{ 0 };
+                    std::error_code Ec;
+                    U.m_Folder = ( std::filesystem::temp_directory_path(Ec) / std::format( L"xlion_live_update_{:X}_{}", reinterpret_cast<std::uintptr_t>(&Mgr), ++s_Count ) ).wstring();
+                    std::filesystem::remove_all( std::filesystem::path(U.m_Folder), Ec );
+                    std::filesystem::create_directories( std::filesystem::path(U.m_Folder), Ec );
+                }
+                live_update::item Item{ .m_Scene = Scene.m_Guid, .m_Root = Id, .m_File = std::format( L"{}/{:X}_{:X}.entity", U.m_Folder, Scene.m_Guid.m_Instance.m_Value, Id ) };
+                if( auto Err = xecs::scene::details::WriteEntityFile( GameMgr, Item.m_File, Id, Scene.m_LocalToRuntime.at(Id), Resolve ); Err )
+                {
+                    std::printf("[Prefab::LiveUpdate] WARNING: instance %s could not be written (%s) - it is left as it is\n", xecs::scene::FormatPermanentId(Id).c_str(), std::string(Err.getMessage()).c_str());
+                    std::fflush(stdout);
+                    continue;
+                }
+                U.m_Items.push_back( std::move(Item) );
+            }
+        }
+        return U;
+    }
+
+    // Returns how many instances were spawned again.
+    inline int FinishLiveUpdate( xecs::scene::mgr& Mgr, live_update& U, bool bDropTemplates ) noexcept
+    {
+        auto& GameMgr = Mgr.m_GameMgr;
+        auto& Prefabs = GameMgr.m_PrefabMgr;
+        if( bDropTemplates ) for( auto& G : U.m_Changed ) Prefabs.DropTemplate( G );
+        Prefabs.InvalidateBaked();
+        if( U.m_Items.empty() ) return 0;
+
+        std::unordered_map<std::uint64_t, xecs::component::entity> Moved;     // an entity of an instance that was replaced -> the one that replaces it (invalid: gone)
+        std::vector<xecs::scene::instance*>                         Touched;
+        int nDone = 0;
+        for( auto& Item : U.m_Items )
+        {
+            auto* pScene = Mgr.Find( Item.m_Scene );
+            if( pScene == nullptr ) continue;
+            auto& Scene  = *pScene;
+            auto  RootIt = Scene.m_LocalToRuntime.find( Item.m_Root );
+            if( RootIt == Scene.m_LocalToRuntime.end() ) continue;
+
+            // The new instance is staged first: when it cannot be made (its prefab no longer loads) the old one stays as it is.
+            std::vector<xecs::scene::details::staged_entity> Staged(1);
+            if( auto Err = xecs::scene::details::ReadEntityFile( GameMgr, Item.m_File, Staged[0] ); Err || Staged[0].m_Id != Item.m_Root )
+            {
+                std::printf("[Prefab::LiveUpdate] WARNING: instance %s could not be read back - it is left as it is\n", xecs::scene::FormatPermanentId(Item.m_Root).c_str());
+                std::fflush(stdout);
+                continue;
+            }
+            const auto* pPI = Staged[0].m_pStaged->find<xecs::editor::prefab_instance>();
+            if( pPI == nullptr || Prefabs.getBaked( pPI->m_PrefabInstance ) == nullptr )
+            {
+                std::printf("[Prefab::LiveUpdate] WARNING: the prefab of instance %s does not load - it is left as it is\n", xecs::scene::FormatPermanentId(Item.m_Root).c_str());
+                std::fflush(stdout);
+                continue;
+            }
+            std::unordered_map<xecs::scene::permanent_id, std::size_t>                      Index{ { Item.m_Root, 0 } };
+            std::vector<std::pair<xecs::scene::permanent_id, xecs::scene::instance_member>> Members;
+            StageSceneInstances( GameMgr, Staged, Index, Members );
+
+            // The old one leaves the world: its root and its members (the entities of the scene under them stay). A member's name that is the one it
+            // was spawned with goes too (the prefab may have renamed it); a rename stays.
+            std::vector<std::pair<xecs::scene::permanent_id, xecs::component::entity>> Old{ { Item.m_Root, RootIt->second } };
+            for( auto& [Id, M] : Scene.m_InstanceMembers )
+            {
+                if( M.m_Root != Item.m_Root ) continue;
+                auto It = Scene.m_LocalToRuntime.find(Id);
+                Old.push_back({ Id, It == Scene.m_LocalToRuntime.end() ? xecs::component::entity{} : It->second });
+                if( auto Name = Scene.m_EntityNames.find(Id); Name != Scene.m_EntityNames.end() && Name->second == M.m_Name ) Scene.m_EntityNames.erase(Name);
+            }
+            for( auto& [Id, E] : Old )
+            {
+                Scene.m_LocalToRuntime.erase(Id);
+                Scene.m_InstanceMembers.erase(Id);
+                if( false == E.isValid() ) continue;
+                Scene.m_RuntimeToLocal.erase(E.m_Value);
+                if( GameMgr.m_ComponentMgr.isEntityValid(E) ) { auto Dead = E; GameMgr.DeleteEntity(Dead); }
+            }
+
+            // The new one: the root under its id, the members under their derived ids.
+            std::vector<xecs::component::entity> Made;
+            for( auto& S : Staged )
+            {
+                if( S.m_Id != Item.m_Root && Scene.m_LocalToRuntime.contains(S.m_Id) )
+                {
+                    std::printf("[Prefab::LiveUpdate] WARNING: the id %s derived for a member of instance %s is already taken - that member is left out\n", xecs::scene::FormatPermanentId(S.m_Id).c_str(), xecs::scene::FormatPermanentId(Item.m_Root).c_str());
+                    std::fflush(stdout);
+                    std::erase_if( Members, [&]( auto& M ) noexcept { return M.first == S.m_Id; } );
+                    continue;
+                }
+                const auto Id = S.m_Id;
+                xecs::scene::details::CreateStagedEntity( GameMgr, Scene, S );
+                Made.push_back( Scene.m_LocalToRuntime.at(Id) );
+            }
+            RegisterMembers( Scene, Members );
+            for( auto E : Made )
+                xecs::persist::details::RemapLoadedEntityReferences( GameMgr, E, [&]( std::int64_t Encoded ) noexcept
+                {
+                    for( auto& R : U.m_Renamed ) if( Encoded > 0 && R.m_Scene == Scene.m_Guid && static_cast<xecs::scene::permanent_id>(Encoded) == R.m_Old ) Encoded = static_cast<std::int64_t>(R.m_New);
+                    return details::ResolveInScene( Scene, Encoded );
+                });
+
+            for( auto& [Id, E] : Old )
+            {
+                if( false == E.isValid() ) continue;
+                auto It = Scene.m_LocalToRuntime.find(Id);
+                Moved[E.m_Value] = It == Scene.m_LocalToRuntime.end() ? xecs::component::entity{} : It->second;
+            }
+            if( std::ranges::find( Touched, pScene ) == Touched.end() ) Touched.push_back( pScene );
+            ++nDone;
+        }
+
+        // What referenced an entity that was replaced references the one that replaces it, in every scene of the world: an instance's parent (its
+        // children list), an entity of the scene under a member (its parent), any other reference, the scenes' tables of external entities.
+        if( false == Moved.empty() )
+        {
+            const auto Remap = [&]( xecs::component::entity R ) noexcept { auto It = R.isValid() ? Moved.find(R.m_Value) : Moved.end(); return It == Moved.end() ? R : It->second; };
+            for( auto& pScene : Mgr.m_SceneInstances )
+            {
+                if( pScene == nullptr ) continue;
+                for( auto& [Id, E] : pScene->m_LocalToRuntime )
+                    if( GameMgr.m_ComponentMgr.isEntityValid(E) ) xecs::persist::details::RemapEntityReferences( GameMgr, E, Remap );
+                for( auto& X : pScene->m_ExternalToRuntime ) X = Remap(X);
+            }
+        }
+        for( auto* pScene : Touched ) LinkChildren( GameMgr, *pScene );
+        GameMgr.m_ArchetypeMgr.UpdateStructuralChanges();
+        return nDone;
+    }
+
+    inline int LiveUpdate( xecs::scene::mgr& Mgr, std::span<const xecs::prefab::guid> Changed, bool bDropTemplates ) noexcept
+    {
+        auto U = PrepareLiveUpdate( Mgr, Changed );
+        return FinishLiveUpdate( Mgr, U, bDropTemplates );
+    }
+
+    //-----------------------------------------------------------------------------------------
     // Unity's "Apply to Prefab": what this one instance does differently becomes its prefab's, and the prefab is saved. Property overrides are
     // written into the template members (a reference to a member of the instance becomes a reference to the prefab's member it stands for; one to
     // anything else cannot be kept by a prefab and is null); component diffs add and remove the components (with their data); the members the
     // instance removed leave the prefab; the entities of the scene under the instance join it, and become members of the instance (they take
     // their derived ids). What concerns a member of a nested instance is written into that nested instance's recipe in the prefab. What addresses
-    // a member the prefab no longer has stays on the instance. Other instances are not touched (Unity: they get the change where they did not
-    // override it, at their next spawn).
+    // a member the prefab no longer has stays on the instance. The other instances in this world get the change where they did not override it
+    // (Unity), at once: they are spawned again (live update, above); the editor tells the other worlds when the file is written.
     //-----------------------------------------------------------------------------------------
     namespace details
     {
@@ -1411,6 +1650,10 @@ namespace xecs::prefab::recipe
         RefreshRecipe( GameMgr, Scene, RootId, [&]( xecs::component::entity T, std::int64_t& Out ) noexcept { return xecs::scene::details::ResolveReferenceInScene( Mgr, Scene, T, Out ); } );
         const auto PI = *details::LiveComponent<xecs::editor::prefab_instance>( GameMgr, Root );
         const auto Guid = PI.m_PrefabInstance;
+
+        // The other instances of the prefab in this world (and those of prefabs that nest it) get the change once it is made (live update): their
+        // recipes are refreshed now, against the prefab as it is before.
+        auto Update = PrepareLiveUpdate( Mgr, std::span<const xecs::prefab::guid>( &Guid, 1 ), Scene.m_Guid, RootId );
 
         plan P;
         if( auto Err = MakePlan(GameMgr, Guid, P); Err ) return Err;
@@ -1625,18 +1868,24 @@ namespace xecs::prefab::recipe
                 for( auto& [Id, M] : Scene.m_InstanceMembers ) if( M.m_Root == OldId ) Inner.push_back({ Id, M });
 
                 details::ReId( Mgr, Scene, OldId, NewId, xecs::scene::instance_member{ .m_Root = RootId, .m_Address = A, .m_Name = Name } );
+                Update.m_Renamed.push_back({ Scene.m_Guid, OldId, NewId });
                 Moved.insert( SourceValue );
                 for( auto& [Id, M] : Inner )
                 {
                     address InnerA = A;
                     InnerA.insert( InnerA.end(), M.m_Address.begin(), M.m_Address.end() );
                     if( auto E = Scene.m_LocalToRuntime.find(Id); E != Scene.m_LocalToRuntime.end() ) Moved.insert( E->second.m_Value );
-                    details::ReId( Mgr, Scene, Id, xecs::scene::DeriveMemberId(RootId, InnerA), xecs::scene::instance_member{ .m_Root = RootId, .m_Address = InnerA, .m_Name = M.m_Name } );
+                    const auto InnerId = xecs::scene::DeriveMemberId(RootId, InnerA);
+                    details::ReId( Mgr, Scene, Id, InnerId, xecs::scene::instance_member{ .m_Root = RootId, .m_Address = InnerA, .m_Name = M.m_Name } );
+                    Update.m_Renamed.push_back({ Scene.m_Guid, Id, InnerId });
                 }
             }
         }
         details::MarkReferencesDirty( Mgr, Scene, Moved );
         Mgr.MarkEntityDirty( Scene.m_Guid, RootId );
+
+        // the other instances, from the prefab as it is now (in memory: what was saved, or what the editor that holds the prefab was handed)
+        FinishLiveUpdate( Mgr, Update, /*bDropTemplates*/ false );
         return {};
     }
 }

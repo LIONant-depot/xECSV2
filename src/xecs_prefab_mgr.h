@@ -77,6 +77,7 @@ namespace xecs::prefab
             void* m_pUser = nullptr;
             bool (*m_pTakes  )( void* pUser, guid Prefab ) noexcept = nullptr;                                  // true: another editor holds the prefab as its document
             bool (*m_pDeliver)( void* pUser, guid Prefab, const std::wstring& Folder ) noexcept = nullptr;      // the folder the saved state was written to (the receiver owns it from here); false: nobody took it, and nothing was written
+            void (*m_pSaved  )( void* pUser, guid Prefab ) noexcept = nullptr;                                  // the prefab's own folder was written: the other editors bring their instances of it up to date (live update, prefabs_plan.md phase 6)
         };
 
         inline
@@ -126,7 +127,7 @@ namespace xecs::prefab
         xecs::component::entity FindBakedMember( guid PrefabGuid, std::span<const std::uint64_t> Address ) noexcept;
 
         // The resident template of a prefab and the plans baked from it are dropped: the prefab changed on disk (a Prefab Editor saved it) and the next instance of it reads the file again.
-        // Instances already made are untouched (live update of them is phase 6).
+        // Instances already made are untouched here: recipe::LiveUpdate (xecs_prefab_recipe_inline.h) drops the template and spawns the instances of a scene again.
         inline
         void        DropTemplate          ( guid PrefabGuid ) noexcept;
 
