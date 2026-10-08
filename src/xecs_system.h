@@ -360,8 +360,8 @@ namespace xecs::system
                                                                     ) const noexcept;
         template
         < typename... T_COMPONENTS
-        > __inline constexpr
-        [[nodiscard]] std::vector<archetype::instance*>
+        > __inline [[nodiscard]] constexpr
+        std::vector<archetype::instance*>
                                             Search                  ( const xecs::query::instance& Query
                                                                     ) const noexcept;
         template
@@ -372,8 +372,8 @@ namespace xecs::system
         ( xecs::function::is_callable_v<T_FUNCTION>
         && xecs::types::is_specialized_v<std::tuple, T_TUPLE_ADD>
         && xecs::types::is_specialized_v<std::tuple, T_TUPLE_SUBTRACT>
-        ) __inline constexpr
-        [[nodiscard]] xecs::component::entity
+        ) __inline [[nodiscard]] constexpr
+        xecs::component::entity
                                             AddOrRemoveComponents   ( xecs::component::entity   Entity
                                                                     , T_FUNCTION&&              Function = xecs::tools::empty_lambda{}
                                                                     ) const noexcept;

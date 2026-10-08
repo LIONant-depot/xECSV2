@@ -327,8 +327,8 @@ namespace xecs::system
     //-------------------------------------------------------------------------------------------
     template
     < typename... T_COMPONENTS
-    > constexpr
-    [[nodiscard]] std::vector<archetype::instance*>
+    > [[nodiscard]] constexpr
+    std::vector<archetype::instance*>
     instance::Search( const xecs::query::instance& Query ) const noexcept
     {
         return m_GameMgr.Search(Query);
@@ -344,8 +344,8 @@ namespace xecs::system
     ( xecs::function::is_callable_v<T_FUNCTION>
     && xecs::types::is_specialized_v<std::tuple, T_TUPLE_ADD>
     && xecs::types::is_specialized_v<std::tuple, T_TUPLE_SUBTRACT>
-    ) constexpr
-    [[nodiscard]] xecs::component::entity
+    ) [[nodiscard]] constexpr
+    xecs::component::entity
 instance::AddOrRemoveComponents
     ( xecs::component::entity   Entity
     , T_FUNCTION&&              Function

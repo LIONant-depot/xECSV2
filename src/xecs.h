@@ -12,7 +12,9 @@
 #ifndef NOMINMAX
     #define NOMINMAX
 #endif
-#include "Windows.h"
+#if defined(_WIN32)
+    #include "Windows.h"
+#endif
 
 // Windows.h (via wingdi.h) #defines ERROR as a plain numeric macro - harmless on its own, but fatal
 // to anything that later declares an identifier literally named ERROR (e.g.

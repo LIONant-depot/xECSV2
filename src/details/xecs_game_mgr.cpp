@@ -1,4 +1,6 @@
+#if defined(_WIN32)
 #include <windows.h>
+#endif
 #include <Lmcons.h>
 #include <time.h>
 #include <format>

@@ -94,12 +94,12 @@ namespace xecs::game_mgr
                                             getEntity               ( xecs::component::entity Entity
                                                                     , T_FUNCTION&&            Function = xecs::tools::empty_lambda{}
                                                                     ) noexcept;
-        inline
-        [[nodiscard]] std::vector<archetype::instance*>
+        [[nodiscard]] inline
+        std::vector<archetype::instance*>
                                             Search                  ( const xecs::query::instance& Query
                                                                     ) const noexcept;
-        inline
-        [[nodiscard]] archetype::instance*  findArchetype           ( xecs::archetype::guid Guid 
+        [[nodiscard]] inline
+        archetype::instance*  findArchetype           ( xecs::archetype::guid Guid 
                                                                     ) const noexcept;
         inline
         archetype::instance&                getOrCreateArchetype    ( std::span<const component::type::info* const> Types 
