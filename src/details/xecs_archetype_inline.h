@@ -395,7 +395,7 @@ namespace xecs::archetype
             else
             {
                 ShareComponentEntityRefs[i] = It->second;
-                m_Mgr.m_GameMgr.getEntity(ShareComponentEntityRefs[i], [](xecs::component::ref_count& RefCount )
+                (void)m_Mgr.m_GameMgr.getEntity(ShareComponentEntityRefs[i], [](xecs::component::ref_count& RefCount )
                 {
                     RefCount.m_Value++;
                 });
@@ -480,7 +480,7 @@ namespace xecs::archetype
             else
             {
                 ShareComponentEntityRefs[i] = It->second;
-                m_Mgr.m_GameMgr.getEntity(ShareComponentEntityRefs[i], [](xecs::component::ref_count& RefCount )
+                (void)m_Mgr.m_GameMgr.getEntity(ShareComponentEntityRefs[i], [](xecs::component::ref_count& RefCount )
                 {
                     RefCount.m_Value++;
                 });
@@ -579,7 +579,7 @@ instance::getOrCreatePoolFamilyFromSameArchetype
             }
             else
             {
-                m_Mgr.m_GameMgr.findEntity(It->second, [](xecs::component::ref_count& RefCount)
+                (void)m_Mgr.m_GameMgr.findEntity(It->second, [](xecs::component::ref_count& RefCount)
                 {
                     RefCount.m_Value++;
                 });
@@ -1272,7 +1272,7 @@ instance::_MoveInEntity
 
                 if (pInfo->m_bBuildShareFilter)
                 {
-                    m_Mgr.m_GameMgr.getEntity(PoolFamily.m_ShareDetails[i].m_Entity, [&](xecs::component::share_filter& ShareFilter)
+                    (void)m_Mgr.m_GameMgr.getEntity(PoolFamily.m_ShareDetails[i].m_Entity, [&](xecs::component::share_filter& ShareFilter)
                     {
                         for (auto& E : ShareFilter.m_lEntries)
                         {
