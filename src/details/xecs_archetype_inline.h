@@ -944,7 +944,7 @@ instance::_CreateEntities
                 {
                     while( !xecs::component::type::IsComponentType<J>(m_InfoArray[Sequence]) ) Sequence++;
                     return Sequence;
-                }(reinterpret_cast<T*>(0))
+                }(static_cast<T*>(nullptr))
                 ...
             };
         }(xecs::types::null_tuple_v<data_sorted_tuple>);

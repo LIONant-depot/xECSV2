@@ -12,7 +12,7 @@ namespace xecs::tools
         {
             static_assert( std::is_same_v< K<J...>, xecs::query::none_of<J...> > ? !((std::is_same_v<J, xecs::component::share_as_data_exclusive_tag>) || ...) : true );
             return ((std::is_same_v<J,xecs::component::share_as_data_exclusive_tag>) || ...);
-        }( reinterpret_cast<T*>(0))) || ... );
+        }( static_cast<T*>(nullptr))) || ... );
 
     }( xecs::types::null_tuple_v<T_QUERY> );
 }
