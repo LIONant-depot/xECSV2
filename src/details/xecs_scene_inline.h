@@ -827,6 +827,15 @@ namespace xecs::scene
         if( pScene == nullptr )
             return xerr::create<xecs::game_mgr::state::FAILURE, "SaveScene: scene is not registered - call FindOrCreate first">();
 
+        // A scene (or prefab document) that did not load whole is never written, by any caller (a Save, a snapshot of the document, UpgradeProject): the entities that loaded may reference the ones that
+        // did not (those references were nulled at load, a child of one lost its parent), and a prefab document is written whole from what loaded - a write would be lossy. The files stay as they are.
+        if( false == pScene->m_UnloadedEntities.empty() )
+        {
+            std::printf("[SaveScene] Guid=%llX : %zu of its entities could not be loaded - nothing was written\n", static_cast<unsigned long long>(SceneGuid.m_Instance.m_Value), pScene->m_UnloadedEntities.size());
+            std::fflush(stdout);
+            return xerr::create<xecs::game_mgr::state::FAILURE, "SaveScene: some of its entities could not be loaded (a component of theirs is not registered: the game module that defines it is not loaded) - nothing was written; open it under a Game that lists that module">();
+        }
+
         // A prefab document is written whole, as a prefab (its rules checked first): there is no pending-change bookkeeping to resolve.
         if( pScene->m_bPrefabDocument ) return xecs::prefab::document::Save( *this, *pScene );
 

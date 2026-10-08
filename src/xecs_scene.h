@@ -178,8 +178,9 @@ namespace xecs::scene
         std::unordered_map<permanent_id, std::string> m_EntityNames;
 
         // Entities the descriptor lists that could not be loaded (their file is unreadable, or a component of theirs is not registered: the game module that defines it is not loaded).
-        // They are not in the world, but they are still the scene's: a Save keeps them in m_ActiveEntities and keeps the components they need in ComponentDeps.txt, instead of
-        // silently forgetting them (the entity file stays on disk, and the next load with the right game module brings them back).
+        // They are not in the world, but they are still the scene's. A scene with any of them did not load whole, and SaveScene refuses to write it (nothing of it is written: the entities that loaded
+        // may reference these, and those references were nulled at load); the files stay as they are, and the next load with the right game module brings them back. (The descriptor and
+        // ComponentDeps.txt writers still keep them, for a caller that writes those alone.)
         std::vector<permanent_id>                   m_UnloadedEntities;
 
         // A prefab open in a Prefab Editor (prefabs_plan.md, phase 5): the scene IS the prefab - its guid is the prefab's, its files are the prefab's folder
