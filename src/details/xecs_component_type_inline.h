@@ -1,3 +1,7 @@
+#if !(defined(_MSC_VER) && !defined(__clang__))
+#include "xecs_msvc_funcsig.h"
+#endif
+
 namespace xecs::component::type::details
 {
     //---------------------------------------------------------------------------------
@@ -6,7 +10,12 @@ namespace xecs::component::type::details
     template< typename T_COMPONENT >
     constexpr auto GenerateGuid() noexcept
     {
+#if defined(_MSC_VER) && !defined(__clang__)
         return type::guid{ __FUNCSIG__ };
+#else
+        // Same text as MSVC's __FUNCSIG__ above, so guids saved by Windows builds match (see xecs_msvc_funcsig.h)
+        return type::guid{ xecs::details::msvc_funcsig::funcsig<T_COMPONENT, "auto __cdecl xecs::component::type::details::GenerateGuid<", ">(void) noexcept">::value.m };
+#endif
     }
 
     //---------------------------------------------------------------------------------

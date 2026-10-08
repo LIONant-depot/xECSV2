@@ -1,3 +1,6 @@
+#if !(defined(_MSC_VER) && !defined(__clang__))
+#include "xecs_msvc_funcsig.h"
+#endif
 namespace xecs::event
 {
     //-------------------------------------------------------------------------------------------
@@ -11,7 +14,11 @@ namespace xecs::event
             {
                 .m_Guid                 = T_SYSTEM::typedef_v.m_Guid.m_Value
                                              ? T_SYSTEM::typedef_v.m_Guid
+#if defined(_MSC_VER) && !defined(__clang__)
                                              : type::guid{ __FUNCSIG__ }
+#else
+                                             : type::guid{ xecs::details::msvc_funcsig::funcsig<T_SYSTEM, "struct xecs::event::type::info __cdecl xecs::event::type::details::CreateInfo<", ">(void) noexcept">::value.m }   // = MSVC __FUNCSIG__ (saved guids match)
+#endif
             ,   .m_pName                = T_SYSTEM::typedef_v.m_pName
 //            ,   .m_ID                   = T_SYSTEM::typedef_v.id_v
             };

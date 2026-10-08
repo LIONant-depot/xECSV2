@@ -1,3 +1,6 @@
+#if !(defined(_MSC_VER) && !defined(__clang__))
+#include "xecs_msvc_funcsig.h"
+#endif
 namespace xecs::system
 {
     namespace details
@@ -186,7 +189,11 @@ namespace xecs::system
             {
                 .m_Guid                 = !T_SYSTEM::typedef_v.m_Guid.empty()
                                              ? T_SYSTEM::typedef_v.m_Guid
+#if defined(_MSC_VER) && !defined(__clang__)
                                              : type::guid{ __FUNCSIG__ }
+#else
+                                             : type::guid{ xecs::details::msvc_funcsig::funcsig<T_SYSTEM, "struct xecs::system::type::info __cdecl xecs::system::type::details::CreateInfo<", ">(void) noexcept">::value.m }   // = MSVC __FUNCSIG__ (saved guids match)
+#endif
             ,   .m_NotifierRegistration = (T_SYSTEM::typedef_v.id_v == type::id::UPDATE)
                                            ? nullptr
                                            : []( xecs::archetype::instance&     Archetype
