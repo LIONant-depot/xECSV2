@@ -35,9 +35,9 @@ namespace xecs::query
             {
                 (([&]<typename J>(std::tuple<J>*) constexpr noexcept
                 {
-                    parent_t::m_CacheShareKeys[xecs::types::tuple_t2i_v<J, parent_t::share_tuple_unfilter>].m_Value = 0;
+                    parent_t::m_CacheShareKeys[xecs::types::tuple_t2i_v<J, typename parent_t::share_tuple_unfilter>].m_Value = 0;
                 }(xecs::types::make_null_tuple_v<T_COMPONENTS>)), ...);
-            }(xecs::types::null_tuple_v<parent_t::share_tuple_unfilter>);
+            }(xecs::types::null_tuple_v<typename parent_t::share_tuple_unfilter>);
         }
     }
 
@@ -61,7 +61,7 @@ namespace xecs::query
                 {
                     if constexpr ( std::is_pointer_v<J>)
                     {
-                        parent_t::m_RemapIndices[xecs::types::tuple_t2i_v<J, parent_t::share_tuple_unfilter>] 
+                        parent_t::m_RemapIndices[xecs::types::tuple_t2i_v<J, typename parent_t::share_tuple_unfilter>] 
                             = (parent_t::m_ArchetypeShareBits.getBit(xecs::component::type::info_v<J>.m_BitID) )
                                 ? parent_t::m_ArchetypeShareBits.getIndexOfComponent(xecs::component::type::info_v<J>.m_BitID)
                                 : -1;
@@ -69,11 +69,11 @@ namespace xecs::query
                     else
                     {
                         assert(parent_t::m_ArchetypeShareBits.getBit(xecs::component::type::info_v<J>.m_BitID));
-                        parent_t::m_RemapIndices[xecs::types::tuple_t2i_v<J, parent_t::share_tuple_unfilter>]
+                        parent_t::m_RemapIndices[xecs::types::tuple_t2i_v<J, typename parent_t::share_tuple_unfilter>]
                             = parent_t::m_ArchetypeShareBits.getIndexOfComponent(xecs::component::type::info_v<J>.m_BitID);
                     }
                 }(xecs::types::make_null_tuple_v<T_COMPONENTS>)), ... );
-            }( xecs::types::null_tuple_v<parent_t::share_tuple_unfilter> );
+            }( xecs::types::null_tuple_v<typename parent_t::share_tuple_unfilter> );
         }
     }
 
@@ -93,7 +93,7 @@ namespace xecs::query
             {
                 (([&]<typename J>(std::tuple<J>*) constexpr noexcept
                 {
-                    const auto      Index               = xecs::types::tuple_t2i_v<T, parent_t::share_tuple_unfilter>;
+                    const auto      Index               = xecs::types::tuple_t2i_v<T, typename parent_t::share_tuple_unfilter>;
                     const auto      RemapedIndex        = parent_t::m_RemapIndices[Index];
                     const auto&     FamilyShareDetails  = Family.m_ShareDetails[RemapedIndex];
 
@@ -139,7 +139,7 @@ namespace xecs::query
                         }
                     }
                 }(xecs::types::make_null_tuple_v<T>), ...));
-            }(xecs::types::null_tuple_v<parent_t::share_tuple_unfilter>);
+            }(xecs::types::null_tuple_v<typename parent_t::share_tuple_unfilter>);
 
             //
             // Compute the key Sum Guid (We will use it to detect if there are changes made in the shares)
@@ -154,13 +154,13 @@ namespace xecs::query
                     }
                     else 
                     {
-                        const int Index = xecs::types::tuple_t2i_v< J, parent_t::share_tuple_unfilter >;
+                        const int Index = xecs::types::tuple_t2i_v< J, typename parent_t::share_tuple_unfilter >;
                         if constexpr (std::is_pointer_v<J>) if( -1 == parent_t::m_RemapIndices[Index] ) return 0;
                         return parent_t::m_CacheShareKeys[Index].m_Value;
                     }
                 }(xecs::types::make_null_tuple_v<T>)) + ...);
 
-            }( xecs::types::null_tuple_v<parent_t::share_tuple_unfilter> );
+            }( xecs::types::null_tuple_v<typename parent_t::share_tuple_unfilter> );
         }
     }
 
@@ -201,8 +201,8 @@ namespace xecs::query
                         const auto I = parent_t::m_pArchetype->getComponentBits().getIndexOfComponent(xecs::component::type::info_v<t>.m_BitID);
                         std::get<t>(parent_t::m_DataTuple) = reinterpret_cast<t>(Pool.m_pComponent[I]);
                     }
-                }( reinterpret_cast<std::tuple<T>*>(nullptr) )), ... );
-            }( xecs::types::null_tuple_v<parent_t::data_tuple_unfilter> );
+                }( static_cast<std::tuple<T>*>(nullptr) )), ... );
+            }( xecs::types::null_tuple_v<typename parent_t::data_tuple_unfilter> );
         }
     }
 
@@ -246,9 +246,9 @@ namespace xecs::query
                                 }
                                 else
                                 {
-                                    auto& MyP = std::get<parent_t::template universal_t<J>>(parent_t::m_DataTuple);
+                                    auto& MyP = std::get<typename parent_t::template universal_t<J>>(parent_t::m_DataTuple);
 
-                                    if constexpr (std::is_pointer_v<J>) if (MyP == nullptr) return reinterpret_cast<J>(nullptr);
+                                    if constexpr (std::is_pointer_v<J>) if (MyP == nullptr) return static_cast<J>(nullptr);
 
                                     auto p = MyP;                   // Back up the pointer
                                     MyP++;                         // Get ready for the next entity
@@ -286,9 +286,9 @@ namespace xecs::query
                                 }
                                 else
                                 {
-                                    auto& MyP = std::get<parent_t::template universal_t<J>>(parent_t::m_DataTuple);
+                                    auto& MyP = std::get<typename parent_t::template universal_t<J>>(parent_t::m_DataTuple);
 
-                                    if constexpr (std::is_pointer_v<J>) if (MyP == nullptr) return reinterpret_cast<J>(nullptr);
+                                    if constexpr (std::is_pointer_v<J>) if (MyP == nullptr) return static_cast<J>(nullptr);
 
                                     auto p = MyP;                   // Back up the pointer
                                     MyP++;                         // Get ready for the next entity
@@ -319,13 +319,13 @@ namespace xecs::query
                     {
                         if constexpr ( false == std::is_const_v<J> )
                         {
-                            const auto Index = xecs::types::tuple_t2i_v<J, parent_t::share_tuple_unfilter>;
+                            const auto Index = xecs::types::tuple_t2i_v<J, typename parent_t::share_tuple_unfilter>;
                             if constexpr (std::is_pointer_v<J>) if(-1 == parent_t::m_RemapIndices[Index]) return;
 
                             UpdatedKeyArray[nNewEnties] = xecs::component::type::details::ComputeShareKey
                             ( parent_t::m_pArchetype->getGuid()
                             , xecs::component::type::info_v<J>
-                            , reinterpret_cast<const std::byte*>(&std::get<parent_t::template universal_t<J>>(parent_t::m_UniversalTuple))
+                            , reinterpret_cast<const std::byte*>(&std::get<typename parent_t::template universal_t<J>>(parent_t::m_UniversalTuple))
                             );
                             NewKeySumGuid += UpdatedKeyArray[nNewEnties++].m_Value;
                         }
@@ -344,9 +344,9 @@ namespace xecs::query
                         {
                             if constexpr (false == std::is_const_v<J>)
                             {
-                                const auto Index = xecs::types::tuple_t2i_v<J, parent_t::share_tuple_unfilter>;
+                                const auto Index = xecs::types::tuple_t2i_v<J, typename parent_t::share_tuple_unfilter>;
                                 if constexpr (std::is_pointer_v<J>) if (-1 == parent_t::m_RemapIndices[Index]) return;
-                                PointersToShares[nCompactify] = reinterpret_cast<std::byte*>(&std::get<parent_t::template universal_t<J>>(parent_t::m_UniversalTuple));
+                                PointersToShares[nCompactify] = reinterpret_cast<std::byte*>(&std::get<typename parent_t::template universal_t<J>>(parent_t::m_UniversalTuple));
                                 nCompactify++;
                             }
                         }(xecs::types::make_null_tuple_v<T>)), ...);
@@ -376,14 +376,14 @@ namespace xecs::query
                         {
                             if constexpr (!std::is_const_v<J>)
                             {
-                                const auto Index = xecs::types::tuple_t2i_v<J, parent_t::share_tuple_unfilter>;
+                                const auto Index = xecs::types::tuple_t2i_v<J, typename parent_t::share_tuple_unfilter>;
                                 if constexpr (std::is_pointer_v<J>) if (-1 == parent_t::m_RemapIndices[Index]) return;
-                                std::get<parent_t::template universal_t<J>>(parent_t::m_UniversalTuple) = *std::get<xecs::types::decay_full_t<J>*>(parent_t::m_CacheSharePointers);
+                                std::get<typename parent_t::template universal_t<J>>(parent_t::m_UniversalTuple) = *std::get<xecs::types::decay_full_t<J>*>(parent_t::m_CacheSharePointers);
                             }
                         }(xecs::types::make_null_tuple_v<T>)), ...);
                     }
 
-                }(xecs::types::null_tuple_v<parent_t::share_tuple_unfilter>);
+                }(xecs::types::null_tuple_v<typename parent_t::share_tuple_unfilter>);
 
                 //
                 // Return the right thing if we are a bool function
@@ -406,9 +406,9 @@ namespace xecs::query
                         return Function
                         ( [&]<typename J>(std::tuple<J>*) constexpr noexcept -> J
                             {
-                                auto& MyP = std::get<parent_t::template universal_t<J>>(parent_t::m_DataTuple);
+                                auto& MyP = std::get<typename parent_t::template universal_t<J>>(parent_t::m_DataTuple);
 
-                                if constexpr (std::is_pointer_v<J>) if (MyP == nullptr) return reinterpret_cast<J>(nullptr);
+                                if constexpr (std::is_pointer_v<J>) if (MyP == nullptr) return static_cast<J>(nullptr);
 
                                 auto p = MyP;                   // Back up the pointer
                                 MyP ++;                         // Get ready for the next entity
@@ -427,9 +427,9 @@ namespace xecs::query
                         Function
                         ( [&]<typename J>(std::tuple<J>*) constexpr noexcept -> J
                             {
-                                auto& MyP = std::get<parent_t::template universal_t<J>>(parent_t::m_DataTuple);
+                                auto& MyP = std::get<typename parent_t::template universal_t<J>>(parent_t::m_DataTuple);
 
-                                if constexpr (std::is_pointer_v<J>) if (MyP == nullptr) return reinterpret_cast<J>(nullptr);
+                                if constexpr (std::is_pointer_v<J>) if (MyP == nullptr) return static_cast<J>(nullptr);
 
                                 auto p = MyP;                   // Back up the pointer
                                 MyP ++;                         // Get ready for the next entity

@@ -76,21 +76,21 @@ namespace xecs::game_mgr
         < typename T_FUNCTION = xecs::tools::empty_lambda
         > requires
         ( xecs::tools::assert_standard_function_v<T_FUNCTION>
-        ) __inline
-        [[nodiscard]] xecs::component::entity
+        ) [[nodiscard]] __inline
+        xecs::component::entity
                                             findEntity              ( xecs::component::entity Entity
                                                                     , T_FUNCTION&&            Function = xecs::tools::empty_lambda{}
                                                                     ) noexcept;
-        __inline
-        [[nodiscard]] xecs::archetype::instance&
+        [[nodiscard]] __inline
+        xecs::archetype::instance&
                                             getArchetype            ( xecs::component::entity Entity 
                                                                     ) const noexcept;
         template
         < typename T_FUNCTION = xecs::tools::empty_lambda
         > requires
         ( xecs::tools::assert_standard_function_v<T_FUNCTION>
-        ) __inline
-        [[nodiscard]] xecs::component::entity
+        ) [[nodiscard]] __inline
+        xecs::component::entity
                                             getEntity               ( xecs::component::entity Entity
                                                                     , T_FUNCTION&&            Function = xecs::tools::empty_lambda{}
                                                                     ) noexcept;
@@ -161,7 +161,7 @@ namespace xecs::game_mgr
         , typename T_FUNCTION  = xecs::tools::empty_lambda
         > requires
         ( xecs::tools::assert_standard_function_v<T_FUNCTION>
-        ) xforceinline [[nodiscard]] xecs::prefab::guid
+        ) [[nodiscard]] xforceinline xecs::prefab::guid
                                             CreatePrefabVariant     ( xecs::prefab::guid        PrefabGuid
                                                                     , T_FUNCTION&&              Function = xecs::tools::empty_lambda{}
                                                                     ) noexcept;

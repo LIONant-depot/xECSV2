@@ -92,7 +92,7 @@ namespace xecs::component::type::details
         {
             using fn_traits = xecs::function::traits<decltype(&T_COMPONENT::FullSerialize)>;
 
-            static_assert(std::is_same_v<fn_traits::class_type, void>, "The FullSerialize function should be a STATIC member function");
+            static_assert(std::is_same_v<typename fn_traits::class_type, void>, "The FullSerialize function should be a STATIC member function");
             static_assert(fn_traits::arg_count_v == 4, "Function must have the same number of arguments, should be 4 --> (xecs::serializer::stream& TextFile, bool isRead, T_COMPONENT_ARRAY*, int& Count ) noexcept");
             static_assert(std::is_same< typename fn_traits::return_type, xerr >::value, "The return type should be --> xerr ");
             static_assert(xecs::function::details::traits_compare_args<fn_traits, xecs::function::traits<void(*)(xecs::serializer::stream&, bool, T_COMPONENT*, int& Count)>, static_cast<int>(fn_traits::arg_count_v) - 1>::value, "Arguments types don't match they should be (xecs::serializer::stream& TextFile, bool isRead, T_COMPONENT_ARRAY*, int& Count )");
@@ -110,7 +110,7 @@ namespace xecs::component::type::details
         {
             using fn_traits = xecs::function::traits<decltype(&T_COMPONENT::Serialize)>;
 
-            static_assert( std::is_same_v<fn_traits::class_type, T_COMPONENT>, "The Serialize function should be a member function" );
+            static_assert( std::is_same_v<typename fn_traits::class_type, T_COMPONENT>, "The Serialize function should be a member function" );
             static_assert( fn_traits::arg_count_v == 2, "Function must have the same number of arguments, should be 2 --> (xecs::serializer::stream& TextFile, bool isRead ) noexcept");
             static_assert( std::is_same< typename fn_traits::return_type, xerr >::value, "The return type should be --> xerr ");
             static_assert( xecs::function::details::traits_compare_args<fn_traits, xecs::function::traits<void(*)(xecs::serializer::stream&, bool)>, static_cast<int>(fn_traits::arg_count_v) - 1>::value, "Arguments types don't match they should be (xecs::serializer::stream& TextFile, bool isRead )");
@@ -183,7 +183,7 @@ namespace xecs::component::type::details
         {
             using fn_traits = xecs::function::traits<decltype(&T_COMPONENT::ComputeShareKey)>;
 
-            static_assert( std::is_same_v<fn_traits::class_type, T_COMPONENT>, "The ComputeShareKey function should be a member function" );
+            static_assert( std::is_same_v<typename fn_traits::class_type, T_COMPONENT>, "The ComputeShareKey function should be a member function" );
             static_assert( fn_traits::arg_count_v == 0, "ComputeShareKey Function should have not arguments");
             static_assert( std::is_same< typename fn_traits::return_type, xecs::component::type::share::key >::value, "The return of the ComputeShareKey Function should be --> xecs::component::type::share::key ");
 
@@ -276,7 +276,7 @@ namespace xecs::component::type::details
         {
             using fn_traits = xecs::function::traits<decltype(&T_COMPONENT::ReportReferences)>;
 
-            static_assert(std::is_same_v<fn_traits::class_type, T_COMPONENT>, "The ReportReferences should be a member function and NOT a STATIC member function");
+            static_assert(std::is_same_v<typename fn_traits::class_type, T_COMPONENT>, "The ReportReferences should be a member function and NOT a STATIC member function");
             static_assert(fn_traits::arg_count_v == 1, "Function must have the same number of arguments, should be 1 --> ( std::vector<xecs::component::entity*>& ) noexcept");
             static_assert(std::is_same< typename fn_traits::return_type, void >::value, "The return type should be --> void");
             static_assert(xecs::function::details::traits_compare_args<fn_traits, xecs::function::traits<void(*)(std::vector<xecs::component::entity*>&)>, static_cast<int>(fn_traits::arg_count_v) - 1>::value, "Arguments types don't match they should be (std::vector<xecs::component::entity*>& )");

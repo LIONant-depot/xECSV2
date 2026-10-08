@@ -149,14 +149,14 @@ namespace xecs::system
         //
         if constexpr (real_system::typedef_v.id_v == type::id::SYSTEM_EVENT)
         {
-            static_assert( xecs::types::tuple_t2i_v<typedef_t::event_t, typedef_t::system_t::events > + 1 );
+            static_assert( xecs::types::tuple_t2i_v<typename typedef_t::event_t, typename typedef_t::system_t::events > + 1 );
             GameMgr.m_EventHandlerRecords.push_back({ &type::info_v<T_SYSTEM>, {}, &type::info_v<typename typedef_t::system_t> });
 
             if constexpr( xecs::types::is_specialized_v<xecs::system::type::child_update, typedef_t > )
             {
                 std::get<typedef_t::event_t>
                 ( 
-                    reinterpret_cast< details::compleated<typedef_t::system_t>* >
+                    reinterpret_cast< details::compleated<typename typedef_t::system_t>* >
                     ( find<typedef_t::system_t>()
                     )->m_Events 
                 )
@@ -166,7 +166,7 @@ namespace xecs::system
             {
                 std::get<typedef_t::event_t>
                 ( 
-                    reinterpret_cast< details::compleated<typedef_t::system_t>* >
+                    reinterpret_cast< details::compleated<typename typedef_t::system_t>* >
                     ( find<typedef_t::system_t>()
                     )->m_Events 
                 )

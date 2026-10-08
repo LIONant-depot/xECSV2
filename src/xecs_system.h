@@ -360,7 +360,7 @@ namespace xecs::system
                                                                     ) const noexcept;
         template
         < typename... T_COMPONENTS
-        > __inline [[nodiscard]] constexpr
+        > [[nodiscard]] __inline constexpr
         std::vector<archetype::instance*>
                                             Search                  ( const xecs::query::instance& Query
                                                                     ) const noexcept;
@@ -372,7 +372,7 @@ namespace xecs::system
         ( xecs::function::is_callable_v<T_FUNCTION>
         && xecs::types::is_specialized_v<std::tuple, T_TUPLE_ADD>
         && xecs::types::is_specialized_v<std::tuple, T_TUPLE_SUBTRACT>
-        ) __inline [[nodiscard]] constexpr
+        ) [[nodiscard]] __inline constexpr
         xecs::component::entity
                                             AddOrRemoveComponents   ( xecs::component::entity   Entity
                                                                     , T_FUNCTION&&              Function = xecs::tools::empty_lambda{}
@@ -428,13 +428,13 @@ namespace xecs::system
         > requires
         ( xecs::tools::assert_standard_function_v<T_FUNCTION>
           && (false == xecs::tools::function_has_share_component_args_v<T_FUNCTION>)
-        ) __inline
-        [[nodiscard]] xecs::component::entity
+        ) [[nodiscard]] __inline
+        xecs::component::entity
                                             findEntity              ( xecs::component::entity Entity
                                                                     , T_FUNCTION&&            Function = xecs::tools::empty_lambda{}
                                                                     ) noexcept;
-        __inline
-        [[nodiscard]] xecs::archetype::instance& 
+        [[nodiscard]] __inline
+        xecs::archetype::instance& 
                                             getArchetype            ( xecs::component::entity Entity
                                                                     ) const noexcept;
         template
@@ -442,15 +442,15 @@ namespace xecs::system
         , typename T_FUNCTION   = xecs::tools::empty_lambda
         > requires
         ( xecs::tools::assert_standard_function_v<T_FUNCTION>
-        ) xforceinline 
-        [[nodiscard]]  xecs::prefab::guid   CreatePrefab            ( T_FUNCTION&&              Function        = xecs::tools::empty_lambda{}
+        ) [[nodiscard]] xforceinline 
+        xecs::prefab::guid   CreatePrefab            ( T_FUNCTION&&              Function        = xecs::tools::empty_lambda{}
                                                                     ) noexcept;
         template
         < typename T_FUNCTION   = xecs::tools::empty_lambda
         > requires
         ( xecs::tools::assert_standard_function_v<T_FUNCTION>
-        ) xforceinline 
-        [[nodiscard]] xecs::prefab::guid    CreatePrefab            ( const xecs::tools::bits&  ComponentBits
+        ) [[nodiscard]] xforceinline 
+        xecs::prefab::guid    CreatePrefab            ( const xecs::tools::bits&  ComponentBits
                                                                     , T_FUNCTION&&              Function        = xecs::tools::empty_lambda{}
                                                                     ) noexcept;
         template
@@ -471,8 +471,8 @@ namespace xecs::system
         , typename T_FUNCTION  = xecs::tools::empty_lambda
         > requires
         ( xecs::tools::assert_standard_function_v<T_FUNCTION>
-        ) xforceinline 
-        [[nodiscard]] xecs::prefab::guid    CreatePrefabVariant     ( xecs::prefab::guid        PrefabGuid
+        ) [[nodiscard]] xforceinline 
+        xecs::prefab::guid    CreatePrefabVariant     ( xecs::prefab::guid        PrefabGuid
                                                                     , T_FUNCTION&&              Function = xecs::tools::empty_lambda{}
                                                                     ) noexcept;
         template

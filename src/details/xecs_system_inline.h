@@ -41,7 +41,7 @@ namespace xecs::system
                     else
                     {
                         auto ArchetypeList = T_USER_SYSTEM::m_GameMgr.Search(type::info_v<T_USER_SYSTEM>.m_Query);
-                        if constexpr( xecs::tools::is_share_as_data_v<T_USER_SYSTEM::query> )
+                        if constexpr( xecs::tools::is_share_as_data_v<typename T_USER_SYSTEM::query> )
                         {
                             T_USER_SYSTEM::m_GameMgr.Foreach<decltype(*this),true>(ArchetypeList, *this);
                         }

@@ -1430,7 +1430,7 @@ AddOrRemoveComponents
            ; !Ec && Entry != std::filesystem::recursive_directory_iterator(); Entry.increment(Ec) )
         {
             if( false == Entry->is_regular_file(Ec) || Entry->path().extension() != L".entity" ) continue;
-            const auto Id = static_cast<local_id>( std::wcstoull( Entry->path().stem().c_str(), nullptr, 16 ) );
+            const auto Id = static_cast<local_id>( std::wcstoull( Entry->path().stem().wstring().c_str(), nullptr, 16 ) );
             if( false == Group.m_LocalToRuntime.contains(Id) )
             {
                 std::error_code RemoveEc;
@@ -1682,7 +1682,7 @@ namespace xecs::prefab::document
            ; !Ec && Entry != std::filesystem::recursive_directory_iterator(); Entry.increment(Ec) )
         {
             if( false == Entry->is_regular_file(Ec) || Entry->path().extension() != L".entity" ) continue;
-            const auto Id = static_cast<xecs::scene::permanent_id>( std::wcstoull( Entry->path().stem().c_str(), nullptr, 16 ) );
+            const auto Id = static_cast<xecs::scene::permanent_id>( std::wcstoull( Entry->path().stem().wstring().c_str(), nullptr, 16 ) );
             if( false == Active.contains(Id) )
             {
                 std::error_code RemoveEc;

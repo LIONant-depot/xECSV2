@@ -128,7 +128,7 @@ namespace xecs::archetype
                 {
                     auto& MyP = CachePointers[xecs::types::tuple_t2i_v<T, typename func_traits::args_tuple>];
 
-                    if constexpr (std::is_pointer_v<T>) if (MyP == nullptr) return reinterpret_cast<T>(nullptr);
+                    if constexpr (std::is_pointer_v<T>) if (MyP == nullptr) return static_cast<T>(nullptr);
 
                     auto p = MyP;                            // Back up the pointer
                     MyP += sizeof(std::remove_pointer_t<T>); // Get ready for the next entity
@@ -157,7 +157,7 @@ namespace xecs::archetype
                 {
                     auto& MyP = CachePointers[xecs::types::tuple_t2i_v<T, typename func_traits::args_tuple>];
 
-                    if constexpr (std::is_pointer_v<T>) if (MyP == nullptr) return reinterpret_cast<T>(nullptr);
+                    if constexpr (std::is_pointer_v<T>) if (MyP == nullptr) return static_cast<T>(nullptr);
 
                     auto p = MyP;                            // Back up the pointer
                     MyP += sizeof(std::remove_pointer_t<T>); // Get ready for the next entity
