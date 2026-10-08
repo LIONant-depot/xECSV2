@@ -46,7 +46,7 @@ namespace xecs::system
                         auto ArchetypeList = T_USER_SYSTEM::m_GameMgr.Search(type::info_v<T_USER_SYSTEM>.m_Query);
                         if constexpr( xecs::tools::is_share_as_data_v<typename T_USER_SYSTEM::query> )
                         {
-                            T_USER_SYSTEM::m_GameMgr.Foreach<decltype(*this),true>(ArchetypeList, *this);
+                            T_USER_SYSTEM::m_GameMgr.template Foreach<decltype(*this),true>(ArchetypeList, *this);
                         }
                         else
                         {
@@ -236,7 +236,8 @@ namespace xecs::system
                                             }
             ,   .m_DestroyFunction      = []( xecs::system::instance& This ) noexcept
                                             {
-                                                std::destroy_at(&static_cast< xecs::system::details::compleated<T_SYSTEM>& >(This));
+                                                // Destroyed AND freed as what it is (made with make_unique of this type): deleting it through a void* (what system::mgr did) ran no destructor and is undefined behavior
+                                                delete &static_cast< xecs::system::details::compleated<T_SYSTEM>& >(This);
                                             }
             ,   .m_BuildFunction        = []() consteval noexcept -> type::info::build_fn*
                                             {

@@ -224,12 +224,12 @@ namespace xecs::game_mgr
             return Count;
         }();
 
-        if (Error = TextFile.Record( "GameMgr"
+        if ((Error = TextFile.Record( "GameMgr"
             , [&](xerr& Error) noexcept
             {
                 Error = TextFile.Field("nArchetypes", ArchetypeCount);
             }
-        )) return Error;
+        ))) return Error;
 
         // If we are writing set the count back to the true count
         // this would allow us to filter later
@@ -239,7 +239,7 @@ namespace xecs::game_mgr
         //
         // Global info
         //
-        if (Error = TextFile.Record( "GlobalInfo", [&](xerr& Error) noexcept
+        if ((Error = TextFile.Record( "GlobalInfo", [&](xerr& Error) noexcept
         {
             int LastSubrangeRuntime = m_ComponentMgr.m_GlobalEntityInfos.m_LastRuntimeSubrange;
             Error = TextFile.Field("LastSubRange", LastSubrangeRuntime);
@@ -258,12 +258,12 @@ namespace xecs::game_mgr
                 }
             }
 
-        })) return Error;
+        }))) return Error;
 
         //
         // Write Global Guids
         //
-        if( Error = TextFile.Record( "GlobalEntities"
+        if( (Error = TextFile.Record( "GlobalEntities"
         ,   [&]( std::size_t& C, xerr& ) noexcept
             {
                 if( false == isRead )
@@ -293,7 +293,7 @@ namespace xecs::game_mgr
             {
                 Error = TextFile.Field("Validation", m_ComponentMgr.m_GlobalEntityInfos.m_pGlobalInfo[i].m_Validation.m_Value );
             }
-        )) return Error;
+        ))) return Error;
 
         //
         // Serialize all the archetypes
@@ -354,7 +354,7 @@ namespace xecs::game_mgr
             //
             // Save the basic archetype info
             //
-            if( Error = TextFile.Record( "Archetype"
+            if( (Error = TextFile.Record( "Archetype"
                 ,   [&]( xerr& Error ) noexcept
                     {
                             (Error = TextFile.Field("Guid",         ArchetypeGuid.m_Value))
@@ -363,12 +363,12 @@ namespace xecs::game_mgr
                         ||  (Error = TextFile.Field("nShareTypes",  nShareTypes))
                         ||  (Error = TextFile.Field("nTagTypes",    nTagTypes));
                     }
-                )) return Error;
+                ))) return Error;
 
             //
             // Read the archetype types
             //
-            if( Error = TextFile.Record( "ArchetypeTypes"
+            if( (Error = TextFile.Record( "ArchetypeTypes"
                 ,   [&]( std::size_t& C, xerr& ) noexcept
                     {
                         if( isRead ) InfoCount  = static_cast<int>(C);
@@ -408,7 +408,7 @@ namespace xecs::game_mgr
                         }
                         TextFile.Field("SerializationMode", SerializedModes[i]).clear();
                     }
-                )) return Error;
+                ))) return Error;
 
 
             if( isRead )
@@ -452,14 +452,14 @@ namespace xecs::game_mgr
                 //
                 xecs::pool::family::guid    FamilyGuid = isRead ? xecs::pool::family::guid{} : pF->m_Guid;
 
-                if( Error = TextFile.Record( "Family"
+                if( (Error = TextFile.Record( "Family"
                 ,   [&]( xerr& Error ) noexcept
                     {
                           (Error = TextFile.Field("Guid",       FamilyGuid.m_Value ))
                         ||(Error = TextFile.Field("nPools",     nPools))
                         ||(Error = TextFile.Field("nEntities",  nEntities));
                     }
-                )) return Error;
+                ))) return Error;
 
                 if( nShareTypes && (Error = TextFile.Record( "FamilyDetails"
                 ,   [&]( std::size_t& C, xerr& ) noexcept
@@ -522,12 +522,12 @@ namespace xecs::game_mgr
                 {
                     int     nEntitiesInPool = isRead ? 0 : pP->Size();
 
-                    if( Error = TextFile.Record( "PoolInfo"
+                    if( (Error = TextFile.Record( "PoolInfo"
                     ,   [&]( xerr& Error ) noexcept
                         {
                             Error = TextFile.Field("nEntities", nEntitiesInPool);
                         }
-                    )) return Error;
+                    ))) return Error;
 
                     // Do we have any entities that we need to deal with?
                     if( nEntitiesInPool == 0 )

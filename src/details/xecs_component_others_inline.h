@@ -36,7 +36,7 @@ namespace xecs::component
         // For each of the components write how many children they have
         //
         int nTotalChildren = 0;
-        if( Error = TextFile.Record("Children"
+        if( (Error = TextFile.Record("Children"
         ,[&](std::size_t& Size, xerr& ) noexcept
         {
             if( isRead ) Count  = static_cast<int>(Size);
@@ -58,7 +58,7 @@ namespace xecs::component
 
             nTotalChildren += nChildren;
 
-        }) ) return Error;
+        }) )) return Error;
 
         //
         // Now that we know all the children from all the components list write all the children together

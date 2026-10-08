@@ -9,7 +9,6 @@ namespace xecs::system
         {
             auto p = m_UpdaterSystems.back().second.release();
             m_UpdaterSystems.back().first->m_DestroyFunction(*p);
-            delete reinterpret_cast<void*>(p);
             m_UpdaterSystems.pop_back();
         }
 
@@ -17,7 +16,6 @@ namespace xecs::system
         {
             auto p = m_NotifierSystems.back().second.release();
             m_NotifierSystems.back().first->m_DestroyFunction(*p);
-            delete reinterpret_cast<void*>(p);
             m_NotifierSystems.pop_back();
         }
 
@@ -25,7 +23,6 @@ namespace xecs::system
         {
             auto p = m_BuilderSystems.back().second.release();
             m_BuilderSystems.back().first->m_DestroyFunction(*p);
-            delete reinterpret_cast<void*>(p);
             m_BuilderSystems.pop_back();
         }
 
@@ -440,7 +437,7 @@ namespace xecs::system
             xtextfile::stream OldStream;
             system_order_config Old;
             xproperty::settings::context OldContext;
-            if( !OldStream.Open(true, std::format(L"{}\\SystemOrder.config.txt", ConfigFolder), { xtextfile::file_type::TEXT })
+            if( !OldStream.Open(true, std::format(L"{}\\SystemOrder.config.txt", ConfigFolder), xtextfile::file_type::TEXT)
                 && !xproperty::sprop::serializer::Stream( OldStream, Old, OldContext ) )
             {
                 auto IndexOf = [&]( std::uint64_t Guid ) noexcept
@@ -460,7 +457,7 @@ namespace xecs::system
         }
 
         xtextfile::stream Stream;
-        if( auto Err = Stream.Open(false, std::format(L"{}\\SystemOrder.config.txt", ConfigFolder), { xtextfile::file_type::TEXT }); Err )
+        if( auto Err = Stream.Open(false, std::format(L"{}\\SystemOrder.config.txt", ConfigFolder), xtextfile::file_type::TEXT); Err )
             return Err;
 
         xproperty::settings::context Context;
@@ -474,7 +471,7 @@ namespace xecs::system
     xerr mgr::Load( void ) noexcept
     {
         xtextfile::stream Stream;
-        if( auto Err = Stream.Open(true, std::format(L"{}\\Project.config\\SystemOrder.config.txt", m_ProjectPath), { xtextfile::file_type::TEXT }); Err )
+        if( auto Err = Stream.Open(true, std::format(L"{}\\Project.config\\SystemOrder.config.txt", m_ProjectPath), xtextfile::file_type::TEXT); Err )
             return {};
 
         system_order_config Config;
