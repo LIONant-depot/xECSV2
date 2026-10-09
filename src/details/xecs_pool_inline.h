@@ -253,6 +253,23 @@ namespace xecs::pool
 
     //-------------------------------------------------------------------------------------
 
+    // Destroys one component and leaves its bytes zeroed. A slot that was destroyed is dead until the pool constructs into it again; zeroing
+    // makes a second destruction by mistake harmless for the standard types (an all-zero std::string/vector/unordered_map frees nothing),
+    // which is what MSVC's std::vector and std::string destructors did on their own (they reset themselves). libstdc++'s do not, and a second
+    // destruction of a slot freed its buffer twice. The pool also reaches dead slots legitimately: an entity moved to another archetype has
+    // its components destroyed at the move and its slot stays in the pool as a zombie until the pool is trimmed or cleared.
+    static inline
+    void DestroyComponent( const xecs::component::type::info& Info, std::byte* pComponent ) noexcept
+    {
+        if( Info.m_pDestructFn )
+        {
+            Info.m_pDestructFn( pComponent );
+            std::memset( pComponent, 0, Info.m_Size );
+        }
+    }
+
+    //-------------------------------------------------------------------------------------
+
     bool instance::Free( index Index, bool bCallDestructors ) noexcept
     {
         assert(Index.m_Value>=0);
@@ -277,7 +294,7 @@ namespace xecs::pool
                         {
                             const auto& MyInfo = *m_ComponentInfos[i];
                             auto        pData = m_pComponent[i];
-                            if (MyInfo.m_pDestructFn) MyInfo.m_pDestructFn(&pData[Index.m_Value * MyInfo.m_Size]);
+                            DestroyComponent(MyInfo, &pData[Index.m_Value * MyInfo.m_Size]);
                         }
                     }
 
@@ -288,14 +305,17 @@ namespace xecs::pool
                 break;
             }
 
-            // We are not moving anything just just call destructors if we have to
-            if (bCallDestructors)
+            // A zombie at the end is dropped. The entry being freed is destroyed here only when it is this very slot: before, the destructors of
+            // Index ran once per trimmed zombie (destroying it several times), and the zombies themselves were never the ones destroyed. A zombie that
+            // is not Index is either waiting in the pending delete list (its Free comes later and finds it past the end) or was moved out (destroyed
+            // at the move): neither is destroyed again here.
+            if (bCallDestructors && m_Size == Index.m_Value)
             {
                 for (int i = 0; i < m_ComponentInfos.size(); ++i)
                 {
                     const auto& MyInfo = *m_ComponentInfos[i];
                     auto        pData = m_pComponent[i];
-                    if (MyInfo.m_pDestructFn) MyInfo.m_pDestructFn(&pData[Index.m_Value * MyInfo.m_Size]);
+                    DestroyComponent(MyInfo, &pData[Index.m_Value * MyInfo.m_Size]);
                 }
             }
 
@@ -316,7 +336,7 @@ namespace xecs::pool
                 }
                 else
                 {
-                    if (bCallDestructors && MyInfo.m_pDestructFn) MyInfo.m_pDestructFn(&pData[Index.m_Value * MyInfo.m_Size]);
+                    if (bCallDestructors) DestroyComponent(MyInfo, &pData[Index.m_Value * MyInfo.m_Size]);
                     memcpy(&pData[Index.m_Value * MyInfo.m_Size], &pData[m_Size * MyInfo.m_Size], MyInfo.m_Size );
                 }
             }
@@ -562,7 +582,7 @@ namespace xecs::pool
             else if(FromPool.m_ComponentInfos[iPoolFrom]->m_Guid.m_Value < m_ComponentInfos[iPoolTo]->m_Guid.m_Value )
             {
                 auto& Info = *FromPool.m_ComponentInfos[iPoolFrom];
-                if( Info.m_pDestructFn ) Info.m_pDestructFn( &FromPool.m_pComponent[iPoolFrom][ Info.m_Size * FromIndexToMove.m_Value ] );
+                DestroyComponent( Info, &FromPool.m_pComponent[iPoolFrom][ Info.m_Size * FromIndexToMove.m_Value ] );
 
                 iPoolFrom++;
                 if( iPoolFrom >= PoolFromCount )
@@ -583,7 +603,7 @@ namespace xecs::pool
         while (iPoolFrom < PoolFromCount)
         {
             auto& Info = *FromPool.m_ComponentInfos[iPoolFrom];
-            if (Info.m_pDestructFn) Info.m_pDestructFn(&FromPool.m_pComponent[iPoolFrom][ Info.m_Size * FromIndexToMove.m_Value ]);
+            DestroyComponent(Info, &FromPool.m_pComponent[iPoolFrom][ Info.m_Size * FromIndexToMove.m_Value ]);
             iPoolFrom++;
         }
 
