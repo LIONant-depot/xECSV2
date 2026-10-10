@@ -260,7 +260,7 @@ int main()
                 CHECK(At != std::string::npos);
                 if (At != std::string::npos) Member.replace(At, std::strlen("PermanentId:g"), "LocalId:g");
                 if (bNoFollow)      // the columns are as wide as their values: matched, not searched as text
-                    Member = std::regex_replace(Member, std::regex(R"(\{ Parent:G +Follow:h \}\r\n//-+ +-+ *\r\n +(#[0-9A-F]+) +#[0-9A-F]+ *)"), "{ Parent:G  }\r\n//---------\r\n  $1");
+                    Member = std::regex_replace(Member, std::regex(R"(\{ Parent:G +Follow:h \}\r?\n//-+ +-+ *\r?\n +(#[0-9A-F]+) +#[0-9A-F]+ *)"), "{ Parent:G  }\r\n//---------\r\n  $1");
                 Text += Member;
             }
             if (bNoFollow) CHECK(Text.find("Follow:h") == std::string::npos && Text.find("{ Parent:G  }") != std::string::npos);
