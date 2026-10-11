@@ -25,7 +25,7 @@ namespace xecs::event
     template< typename T_EVENT >
     void mgr::Register( void ) noexcept
     {
-        m_GlobalEvents.push_back( std::make_unique<T_EVENT>() );
+        m_GlobalEvents.push_back( { new T_EVENT(), []( overrides* p ) noexcept { delete static_cast<T_EVENT*>(p); } } );
         m_GlobalEventsMap.emplace( type::info_v<T_EVENT>.m_Guid, m_GlobalEvents.back().get() );
     }
 }
