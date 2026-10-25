@@ -252,7 +252,18 @@ namespace xecs::prefab::recipe
                 {
                     if( Prop.m_PropertyName == pName ) { Current = std::move(V); bFound = true; }
                 });
-                if( !bFound || !Current.hasValue() ) continue;
+                if( !bFound )
+                {
+                    // Not listed now: a view whose rows are made from a resource not loaded yet (a Mesh slot's parameter rows, keyed by the
+                    // parameter: "Parameters[G:id]/Override"). Set as the text it was recorded as - a view that takes text makes the row; a
+                    // property of another type refuses it, as before
+                    xproperty::any Text;
+                    Text.set<std::string>( Prop.m_PropertyValueAsString );
+                    std::string SetError;
+                    xproperty::sprop::setProperty( SetError, pData, *Info.m_pPropertyTable, xproperty::sprop::container::prop{ Prop.m_PropertyName, Text }, Context );
+                    continue;
+                }
+                if( !Current.hasValue() ) continue;
 
                 xproperty::any Parsed;
                 if( IsEntityValue(Current) )
